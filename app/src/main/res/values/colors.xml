@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="blue_200">#FFBBDEFB</color> <!-- Light Blue -->
+    <color name="blue_500">#FF2196F3</color> <!-- Medium Blue -->
+    <color name="blue_700">#FF1976D2</color> <!-- Dark Blue -->
+    <color name="light_blue_200">#FF80D8FF</color> <!-- Light Cyan -->
+    <color name="light_blue_700">#FF0091EA</color> <!-- Dark Cyan -->
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="cyan_200">#80DEEA</color>
+    <color name="cyan_700">#0097A7</color>
+
+</resources>

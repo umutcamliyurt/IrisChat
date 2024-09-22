@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp"
+    android:background="#2C2C2E">
+
+    <!-- Server Input -->
+    <EditText
+        android:id="@+id/serverInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="IRC Server (e.g., irc.libera.chat)"
+        style="@style/CustomEditText"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Port Input -->
+    <EditText
+        android:id="@+id/portInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Port (e.g., 6667)"
+        android:inputType="number"
+        style="@style/CustomEditText"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Nickname Input -->
+    <EditText
+        android:id="@+id/nicknameInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Nickname"
+        style="@style/CustomEditText"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Channel Input -->
+    <EditText
+        android:id="@+id/channelInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Channel (e.g., #test-channel)"
+        style="@style/CustomEditText"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Connect Button -->
+    <Button
+        android:id="@+id/connectButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Connect"
+        android:textColor="#FFFFFF"
+        android:background="#007BFF" 
+        android:layout_marginBottom="16dp" />
+
+    <!-- Chat Display -->
+    <ScrollView
+        android:id="@+id/chatScrollView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginBottom="8dp">
+
+        <TextView
+            android:id="@+id/chatDisplay"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="16sp"
+            android:padding="10dp"
+            android:background="#2C2C2E"
+            android:textColor="#FFFFFF"
+            android:scrollbars="vertical" />
+    </ScrollView>
+
+    <!-- Chat Input -->
+    <EditText
+        android:id="@+id/chatInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Enter your message"
+        android:padding="10dp"
+        style="@style/CustomEditText"
+        android:layout_marginBottom="8dp" />
+
+    <!-- Send Button -->
+    <Button
+        android:id="@+id/sendButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Send"
+        android:textColor="#FFFFFF"
+        android:background="#007BFF" /> 
+</LinearLayout>
+

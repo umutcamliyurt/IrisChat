@@ -1,0 +1,32 @@
+[versions]
+agp = "8.4.0"
+junit = "4.13.2"
+junitVersion = "1.2.1"
+espressoCore = "3.6.1"
+appcompat = "1.7.0"
+material = "1.12.0"
+pircbotx = "2.1"
+minaCore = "3.0.0-M2"
+irc = "1.1.4"
+nirc = "1.0.0"
+javacord = "3.8.0"
+okhttp = "5.0.0-alpha.14"
+commonsNet = "20030805.205232"
+
+[libraries]
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
+espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+pircbotx = { group = "org.pircbotx", name = "pircbotx", version.ref = "pircbotx" }
+mina-core = { group = "org.apache.mina", name = "mina-core", version.ref = "minaCore" }
+irc = { group = "org.jibble", name = "irc", version.ref = "irc" }
+nirc = { group = "com.github.thefifthgandalf", name = "nirc", version.ref = "nirc" }
+javacord = { group = "org.javacord", name = "javacord", version.ref = "javacord" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+commons-net = { group = "commons-net", name = "commons-net", version.ref = "commonsNet" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+
