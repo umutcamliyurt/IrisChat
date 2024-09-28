@@ -10,7 +10,7 @@ IRC, or Internet Relay Chat, is a protocol for real-time text messaging and comm
 
 - Small codebase
 
-- Onion services support when used with [Orbot](https://orbot.app/en/)
+- Onion services support when used with [Orbot](https://orbot.app/en/) [TorVPN](https://gitlab.torproject.org/tpo/applications/vpn/-/packages) [InviZible Pro](https://play.google.com/store/apps/details?id=pan.alexander.tordnscrypt.gp&hl=en_US) [i2pd](https://i2pd.website/)
 
 - Built in Java
 
