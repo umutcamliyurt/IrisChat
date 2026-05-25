@@ -1,0 +1,305 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/bg_dialog">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="20dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp">
+
+        <TextView
+            android:id="@+id/sheetTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/add_server_short"
+            android:textColor="@color/text_primary"
+            android:textSize="18sp"
+            android:fontFamily="sans-serif-medium" />
+
+        <Button
+            android:id="@+id/btnCancel"
+            style="@style/Widget.AppCompat.Button.Borderless"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/cancel"
+            android:textColor="@color/text_secondary"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/btnSave"
+            style="@style/IrisButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/save"
+            android:textSize="14sp"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
+            android:layout_marginStart="4dp" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
+
+    <androidx.core.widget.NestedScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
+            android:paddingTop="16dp"
+            android:paddingBottom="32dp">
+
+            <TextView
+                style="@style/IrisInputLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/profile_name"
+                android:layout_marginBottom="4dp" />
+
+            <EditText
+                android:id="@+id/inputServerName"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="@string/hint_profile_name"
+                android:inputType="text"
+                android:layout_marginBottom="16dp" />
+
+            <TextView
+                style="@style/IrisInputLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/server_host"
+                android:layout_marginBottom="4dp" />
+
+            <EditText
+                android:id="@+id/inputHost"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="@string/hint_server_host"
+                android:inputType="textUri"
+                android:layout_marginBottom="16dp" />
+
+            <TextView
+                style="@style/IrisInputLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/port"
+                android:layout_marginBottom="4dp" />
+
+            <EditText
+                android:id="@+id/inputPort"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="@string/hint_port"
+                android:inputType="number"
+                android:layout_marginBottom="16dp" />
+
+            <TextView
+                style="@style/IrisInputLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/nickname"
+                android:layout_marginBottom="4dp" />
+
+            <EditText
+                android:id="@+id/inputNickname"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="@string/hint_your_nick"
+                android:inputType="text"
+                android:layout_marginBottom="16dp" />
+
+            <TextView
+                style="@style/IrisInputLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/channels"
+                android:layout_marginBottom="4dp" />
+
+            <EditText
+                android:id="@+id/inputChannel"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="@string/hint_channels"
+                android:inputType="text"
+                android:layout_marginBottom="16dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="16dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/IrisInputLabel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/tls_ssl" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/encrypted_connection"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="12sp"
+                        android:layout_marginTop="2dp" />
+                </LinearLayout>
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/switchTls"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:checked="true"
+                    android:theme="@style/IrisTlsSwitch" />
+            </LinearLayout>
+
+            <TextView
+                style="@style/IrisInputLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/server_password_optional"
+                android:layout_marginBottom="4dp" />
+
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginBottom="16dp">
+
+                <EditText
+                    android:id="@+id/inputPassword"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:hint="@string/leave_blank_if_none"
+                    android:inputType="textPassword"
+                    android:paddingEnd="48dp" />
+
+                <ImageView
+                    android:id="@+id/togglePasswordVisibility"
+                    android:layout_width="42dp"
+                    android:layout_height="42dp"
+                    android:layout_gravity="end|center_vertical"
+                    android:padding="10dp"
+                    android:src="@android:drawable/ic_menu_view"
+                    android:contentDescription="@string/toggle_password_visibility"
+                    android:tint="@color/text_secondary"
+                    android:background="?attr/selectableItemBackgroundBorderless" />
+            </FrameLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="16dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/IrisInputLabel"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/sasl_authentication" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/plain_mechanism"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="12sp"
+                        android:layout_marginTop="2dp" />
+                </LinearLayout>
+
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/switchSasl"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:checked="false"
+                    android:theme="@style/IrisTlsSwitch" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/saslFields"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <TextView
+                    style="@style/IrisInputLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/account_name"
+                    android:layout_marginBottom="4dp" />
+
+                <EditText
+                    android:id="@+id/inputSaslLogin"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:hint="@string/hint_nickname"
+                    android:inputType="text"
+                    android:layout_marginBottom="16dp" />
+
+                <TextView
+                    style="@style/IrisInputLabel"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/sasl_password"
+                    android:layout_marginBottom="4dp" />
+
+                <FrameLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp">
+
+                    <EditText
+                        android:id="@+id/inputSaslPassword"
+                        android:layout_width="match_parent"
+                        android:layout_height="48dp"
+                        android:hint="@string/nickserv_password"
+                        android:inputType="textPassword"
+                        android:paddingEnd="48dp" />
+
+                    <ImageView
+                        android:id="@+id/toggleSaslPasswordVisibility"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:layout_gravity="end|center_vertical"
+                        android:padding="10dp"
+                        android:src="@android:drawable/ic_menu_view"
+                        android:contentDescription="@string/toggle_sasl_password_visibility"
+                        android:tint="@color/text_secondary"
+                        android:background="?attr/selectableItemBackgroundBorderless" />
+                </FrameLayout>
+
+            </LinearLayout>
+
+        </LinearLayout>
+    </androidx.core.widget.NestedScrollView>
+
+</LinearLayout>

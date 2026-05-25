@@ -1,0 +1,486 @@
+package com.umut.irischat;
+
+import android.content.Context;
+import android.content.Intent;
+import android.content.res.Configuration;
+import android.os.Bundle;
+import android.text.InputType;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.app.Dialog;
+import android.widget.ArrayAdapter;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.ImageView;
+import android.widget.ListView;
+import android.widget.TextView;
+import android.widget.Toast;
+import java.util.Locale;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.widget.SwitchCompat;
+
+import com.google.android.material.bottomsheet.BottomSheetBehavior;
+import com.google.android.material.bottomsheet.BottomSheetDialog;
+import com.google.android.material.bottomsheet.BottomSheetDialogFragment;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class ServerSwitcherActivity extends AppCompatActivity {
+
+    public static final String EXTRA_SERVER_JSON = "extra_server_json";
+
+    private static final String CRYPTO_KEY_LIST = "server_list";
+    private static final String KEY_LANGUAGE    = "app_language";
+
+    private ListView          serverListView;
+    private Button            addServerButton;
+    private List<Server>      servers;
+    private ServerListAdapter adapter;
+
+    private CryptoStore crypto;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        crypto = UnlockActivity.cryptoStore;
+        if (crypto == null || !crypto.isUnlocked()) {
+            startActivity(new Intent(this, UnlockActivity.class));
+            finish();
+            return;
+        }
+
+        applyLocale(false);
+        setContentView(R.layout.activity_server_switcher);
+
+        serverListView  = findViewById(R.id.serverListView);
+        addServerButton = findViewById(R.id.addServerButton);
+
+        findViewById(R.id.settingsButton).setOnClickListener(v -> showSettingsDialog());
+
+        servers = loadServers();
+        adapter = new ServerListAdapter(this, servers);
+        serverListView.setAdapter(adapter);
+
+        serverListView.setOnItemClickListener((p, v, pos, id) ->
+                returnServer(servers.get(pos)));
+
+        serverListView.setOnItemLongClickListener((p, v, pos, id) -> {
+            showEditDeleteDialog(pos);
+            return true;
+        });
+
+        addServerButton.setOnClickListener(v -> showAddEditSheet(null, -1));
+
+        applyAccent();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        applyAccent();
+    }
+
+    private void applyAccent() {
+        int accent = ThemeHelper.getAccent(crypto);
+        ThemeHelper.currentAccent = accent;
+        addServerButton.setBackgroundTintList(
+                android.content.res.ColorStateList.valueOf(accent));
+        if (adapter != null) adapter.notifyDataSetChanged();
+    }
+
+    private void returnServer(Server server) {
+        try {
+            Intent result = new Intent();
+            result.putExtra(EXTRA_SERVER_JSON, server.toJson().toString());
+            setResult(RESULT_OK, result);
+            finish();
+        } catch (JSONException e) {
+            Toast.makeText(this, R.string.error_selecting_server, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void showAddEditSheet(Server existing, int editIndex) {
+        ServerEditSheet sheet = ServerEditSheet.newInstance(existing, editIndex);
+        sheet.setListener((server, idx) -> {
+            if (idx >= 0) servers.set(idx, server);
+            else          servers.add(server);
+            saveServers();
+            adapter.notifyDataSetChanged();
+        });
+        sheet.show(getSupportFragmentManager(), "server_edit");
+    }
+
+    private void showEditDeleteDialog(int index) {
+        new AlertDialog.Builder(this, R.style.IrisDialog)
+                .setTitle(servers.get(index).getName())
+                .setItems(new String[]{
+                        getString(R.string.edit),
+                        getString(R.string.delete)
+                }, (dialog, which) -> {
+                    if (which == 0) showAddEditSheet(servers.get(index), index);
+                    else {
+                        servers.remove(index);
+                        saveServers();
+                        adapter.notifyDataSetChanged();
+                    }
+                })
+                .show();
+    }
+
+    private void showSettingsDialog() {
+        View view = LayoutInflater.from(this).inflate(R.layout.dialog_settings, null);
+
+        androidx.appcompat.widget.SwitchCompat switchDmAd =
+                view.findViewById(R.id.switchDmAdvertisement);
+        switchDmAd.setChecked("true".equals(
+                crypto.getString(MainActivity.KEY_DM_ADVERTISEMENT, null)));
+        switchDmAd.setOnCheckedChangeListener((btn, checked) ->
+                crypto.putString(MainActivity.KEY_DM_ADVERTISEMENT, checked ? "true" : "false"));
+
+        android.widget.LinearLayout swatchRow = view.findViewById(R.id.colorSwatchRow);
+        int currentAccent  = ThemeHelper.getAccent(crypto);
+        int swatchSizePx   = (int) (36 * getResources().getDisplayMetrics().density);
+        int swatchMarginPx = (int) (8  * getResources().getDisplayMetrics().density);
+        int strokePx       = (int) (3  * getResources().getDisplayMetrics().density);
+
+        for (int i = 0; i < ThemeHelper.ACCENT_COLORS.length; i++) {
+            final int color = ThemeHelper.ACCENT_COLORS[i];
+            final String label = ThemeHelper.ACCENT_LABELS[i];
+
+            android.widget.FrameLayout swatch = new android.widget.FrameLayout(this);
+            android.widget.LinearLayout.LayoutParams lp =
+                    new android.widget.LinearLayout.LayoutParams(swatchSizePx, swatchSizePx);
+            lp.setMargins(0, 0, swatchMarginPx, 0);
+            swatch.setLayoutParams(lp);
+
+            android.graphics.drawable.GradientDrawable circle =
+                    new android.graphics.drawable.GradientDrawable();
+            circle.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+            circle.setColor(color);
+            if (color == currentAccent) {
+                circle.setStroke(strokePx, 0xFFFFFFFF);
+            }
+            swatch.setBackground(circle);
+            swatch.setContentDescription(label);
+
+            swatch.setOnClickListener(v -> {
+                ThemeHelper.saveAccent(crypto, color);
+                for (int j = 0; j < swatchRow.getChildCount(); j++) {
+                    android.widget.FrameLayout s =
+                            (android.widget.FrameLayout) swatchRow.getChildAt(j);
+                    android.graphics.drawable.GradientDrawable d =
+                            (android.graphics.drawable.GradientDrawable) s.getBackground();
+                    d.setStroke(ThemeHelper.ACCENT_COLORS[j] == color ? strokePx : 0,
+                            0xFFFFFFFF);
+                }
+            });
+
+            swatchRow.addView(swatch);
+        }
+
+        Button btnEn = view.findViewById(R.id.btnLangEnglish);
+        Button btnTr = view.findViewById(R.id.btnLangTurkish);
+        Button btnRu = view.findViewById(R.id.btnLangRussian);
+
+        String currentLang = crypto.getString(KEY_LANGUAGE, "en");
+        if (currentLang == null || currentLang.isEmpty()) currentLang = "en";
+        updateLangButtons(btnEn, btnTr, btnRu, currentLang);
+
+        final String[] selectedLang = {currentLang};
+        btnEn.setOnClickListener(v -> {
+            selectedLang[0] = "en";
+            crypto.putString(KEY_LANGUAGE, "en");
+            updateLangButtons(btnEn, btnTr, btnRu, "en");
+        });
+        btnTr.setOnClickListener(v -> {
+            selectedLang[0] = "tr";
+            crypto.putString(KEY_LANGUAGE, "tr");
+            updateLangButtons(btnEn, btnTr, btnRu, "tr");
+        });
+        btnRu.setOnClickListener(v -> {
+            selectedLang[0] = "ru";
+            crypto.putString(KEY_LANGUAGE, "ru");
+            updateLangButtons(btnEn, btnTr, btnRu, "ru");
+        });
+
+        new AlertDialog.Builder(this, R.style.IrisDialog)
+                .setTitle(R.string.settings)
+                .setView(view)
+                .setPositiveButton(R.string.settings_done, (d, w) -> {
+                    String activeLang = getResources().getConfiguration()
+                            .getLocales().get(0).getLanguage();
+                    if (!selectedLang[0].equals(activeLang)) {
+                        applyLocale(true);
+                    }
+                })
+                .show();
+    }
+
+    private void applyLocale(boolean restart) {
+        String lang = crypto != null ? crypto.getString(KEY_LANGUAGE, "en") : "en";
+        if (lang == null || lang.isEmpty()) lang = "en";
+        Locale locale = new Locale(lang);
+        Locale.setDefault(locale);
+        Configuration config = new Configuration(getResources().getConfiguration());
+        config.setLocale(locale);
+        getResources().updateConfiguration(config, getResources().getDisplayMetrics());
+        if (restart) {
+            Intent intent = getIntent();
+            finish();
+            startActivity(intent);
+        }
+    }
+
+    private void updateLangButtons(Button btnEn, Button btnTr, Button btnRu, String lang) {
+        int accent = ThemeHelper.getAccent(crypto);
+        android.content.res.ColorStateList accentList =
+                android.content.res.ColorStateList.valueOf(accent);
+        android.content.res.ColorStateList transparent =
+                android.content.res.ColorStateList.valueOf(android.graphics.Color.TRANSPARENT);
+
+        for (Button btn : new Button[]{btnEn, btnTr, btnRu}) {
+            btn.setBackgroundTintList(transparent);
+            btn.setTextColor(accent);
+        }
+        Button active = "tr".equals(lang) ? btnTr : "ru".equals(lang) ? btnRu : btnEn;
+        active.setBackgroundTintList(accentList);
+        active.setTextColor(0xFFFFFFFF);
+    }
+
+    private List<Server> loadServers() {
+        List<Server> list = new ArrayList<>();
+        String raw = crypto.getString(CRYPTO_KEY_LIST, null);
+        if (raw == null) return list;
+        try {
+            JSONArray arr = new JSONArray(raw);
+            for (int i = 0; i < arr.length(); i++)
+                list.add(Server.fromJson(arr.getJSONObject(i)));
+        } catch (JSONException e) { e.printStackTrace(); }
+        return list;
+    }
+
+    private void saveServers() {
+        JSONArray arr = new JSONArray();
+        for (Server s : servers) {
+            try { arr.put(s.toJson()); } catch (JSONException ignored) {}
+        }
+        crypto.putString(CRYPTO_KEY_LIST, arr.toString());
+    }
+
+    private static class ServerListAdapter extends ArrayAdapter<Server> {
+        ServerListAdapter(Context ctx, List<Server> items) {
+            super(ctx, R.layout.item_server, items);
+        }
+
+        @Override
+        public View getView(int position, View convertView, ViewGroup parent) {
+            if (convertView == null)
+                convertView = LayoutInflater.from(getContext())
+                        .inflate(R.layout.item_server, parent, false);
+
+            Server s = getItem(position);
+            String initial = s.getName().isEmpty() ? "#"
+                    : String.valueOf(s.getName().charAt(0)).toUpperCase();
+            TextView initialView = convertView.findViewById(R.id.serverInitial);
+            initialView.setText(initial);
+            initialView.setBackgroundTintList(
+                    android.content.res.ColorStateList.valueOf(ThemeHelper.currentAccent));
+            ((TextView) convertView.findViewById(R.id.serverName)).setText(s.getName());
+            convertView.findViewById(R.id.serverDetail).setVisibility(View.GONE);
+            convertView.findViewById(R.id.lockIcon).setVisibility(View.GONE);
+            return convertView;
+        }
+    }
+
+    public interface OnServerSavedListener {
+        void onSaved(Server server, int editIndex);
+    }
+
+    public static class ServerEditSheet extends BottomSheetDialogFragment {
+
+        private static final String ARG_SERVER_JSON = "server_json";
+        private static final String ARG_EDIT_INDEX  = "edit_index";
+
+        private OnServerSavedListener listener;
+
+        public static ServerEditSheet newInstance(Server existing, int editIndex) {
+            ServerEditSheet f = new ServerEditSheet();
+            Bundle args = new Bundle();
+            args.putInt(ARG_EDIT_INDEX, editIndex);
+            if (existing != null) {
+                try { args.putString(ARG_SERVER_JSON, existing.toJson().toString()); }
+                catch (JSONException ignored) {}
+            }
+            f.setArguments(args);
+            return f;
+        }
+
+        public void setListener(OnServerSavedListener l) { this.listener = l; }
+
+        @NonNull
+        @Override
+        public Dialog onCreateDialog(@Nullable Bundle savedInstanceState) {
+            BottomSheetDialog dialog = (BottomSheetDialog) super.onCreateDialog(savedInstanceState);
+            dialog.setOnShowListener(d -> {
+                BottomSheetDialog bsd = (BottomSheetDialog) d;
+                View sheet = bsd.findViewById(com.google.android.material.R.id.design_bottom_sheet);
+                if (sheet != null) {
+                    sheet.getLayoutParams().height = ViewGroup.LayoutParams.MATCH_PARENT;
+                    BottomSheetBehavior<View> behavior = BottomSheetBehavior.from(sheet);
+                    behavior.setState(BottomSheetBehavior.STATE_EXPANDED);
+                    behavior.setSkipCollapsed(true);
+                }
+            });
+            return dialog;
+        }
+
+        @Nullable
+        @Override
+        public View onCreateView(@NonNull LayoutInflater inflater,
+                                 @Nullable ViewGroup container,
+                                 @Nullable Bundle savedInstanceState) {
+            return inflater.inflate(R.layout.dialog_server_edit, container, false);
+        }
+
+        @Override
+        public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+            super.onViewCreated(view, savedInstanceState);
+
+            int editIndex = getArguments() != null ? getArguments().getInt(ARG_EDIT_INDEX, -1) : -1;
+            String existingJson = getArguments() != null
+                    ? getArguments().getString(ARG_SERVER_JSON, null) : null;
+            Server existing = null;
+            if (existingJson != null) {
+                try { existing = Server.fromJson(new JSONObject(existingJson)); }
+                catch (JSONException ignored) {}
+            }
+
+            EditText     nameInput          = view.findViewById(R.id.inputServerName);
+            EditText     hostInput          = view.findViewById(R.id.inputHost);
+            EditText     portInput          = view.findViewById(R.id.inputPort);
+            EditText     nicknameInput      = view.findViewById(R.id.inputNickname);
+            EditText     channelInput       = view.findViewById(R.id.inputChannel);
+            EditText     passwordInput      = view.findViewById(R.id.inputPassword);
+            ImageView    togglePassword     = view.findViewById(R.id.togglePasswordVisibility);
+            SwitchCompat tlsSwitch          = view.findViewById(R.id.switchTls);
+            SwitchCompat saslSwitch         = view.findViewById(R.id.switchSasl);
+            View         saslFields         = view.findViewById(R.id.saslFields);
+            EditText     saslLoginInput     = view.findViewById(R.id.inputSaslLogin);
+            EditText     saslPasswordInput  = view.findViewById(R.id.inputSaslPassword);
+            ImageView    toggleSaslPassword = view.findViewById(R.id.toggleSaslPasswordVisibility);
+            Button       saveButton         = view.findViewById(R.id.btnSave);
+            Button       cancelButton       = view.findViewById(R.id.btnCancel);
+            TextView     titleView          = view.findViewById(R.id.sheetTitle);
+
+            titleView.setText(existing == null ? R.string.add_server_title : R.string.edit_server_title);
+
+            tlsSwitch.setOnCheckedChangeListener((btn, isChecked) -> {
+                String p = portInput.getText().toString().trim();
+                if (p.equals("6667") || p.equals("6697") || p.isEmpty())
+                    portInput.setText(isChecked ? "6697" : "6667");
+            });
+
+            final boolean[] pwVisible = {false};
+            togglePassword.setOnClickListener(v -> {
+                pwVisible[0] = !pwVisible[0];
+                passwordInput.setInputType(pwVisible[0]
+                        ? InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                        : InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+                togglePassword.setImageResource(pwVisible[0]
+                        ? android.R.drawable.ic_menu_close_clear_cancel
+                        : android.R.drawable.ic_menu_view);
+                passwordInput.setSelection(passwordInput.getText().length());
+            });
+
+            saslSwitch.setOnCheckedChangeListener((btn, checked) ->
+                    saslFields.setVisibility(checked ? View.VISIBLE : View.GONE));
+
+            final boolean[] saslPwVisible = {false};
+            toggleSaslPassword.setOnClickListener(v -> {
+                saslPwVisible[0] = !saslPwVisible[0];
+                saslPasswordInput.setInputType(saslPwVisible[0]
+                        ? InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                        : InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+                toggleSaslPassword.setImageResource(saslPwVisible[0]
+                        ? android.R.drawable.ic_menu_close_clear_cancel
+                        : android.R.drawable.ic_menu_view);
+                saslPasswordInput.setSelection(saslPasswordInput.getText().length());
+            });
+
+            if (existing != null) {
+                nameInput.setText(existing.getName());
+                hostInput.setText(existing.getHost());
+                portInput.setText(String.valueOf(existing.getPort()));
+                nicknameInput.setText(existing.getNickname());
+                channelInput.setText(existing.getChannelsAsString());
+                passwordInput.setText(existing.getPassword());
+                tlsSwitch.setChecked(existing.isTls());
+                boolean hasSasl = existing.hasSasl();
+                saslSwitch.setChecked(hasSasl);
+                saslFields.setVisibility(hasSasl ? View.VISIBLE : View.GONE);
+                saslLoginInput.setText(existing.getSaslLogin());
+                saslPasswordInput.setText(existing.getSaslPassword());
+            } else {
+                portInput.setText("6697");
+                tlsSwitch.setChecked(true);
+            }
+
+            cancelButton.setOnClickListener(v -> dismiss());
+
+            saveButton.setOnClickListener(v -> {
+                String name     = nameInput.getText().toString().trim();
+                String host     = hostInput.getText().toString().trim();
+                String portStr  = portInput.getText().toString().trim();
+                String nickname = nicknameInput.getText().toString().trim();
+                String chanRaw  = channelInput.getText().toString().trim();
+                String password = passwordInput.getText().toString();
+                boolean tls     = tlsSwitch.isChecked();
+                boolean sasl    = saslSwitch.isChecked();
+                String saslLogin    = saslLoginInput.getText().toString().trim();
+                String saslPassword = saslPasswordInput.getText().toString();
+
+                if (name.isEmpty() || host.isEmpty() || portStr.isEmpty()
+                        || nickname.isEmpty() || chanRaw.isEmpty()) {
+                    Toast.makeText(getContext(), R.string.all_fields_required,
+                            Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (sasl && (saslLogin.isEmpty() || saslPassword.isEmpty())) {
+                    Toast.makeText(getContext(), R.string.sasl_fields_required,
+                            Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                int port;
+                try {
+                    port = Integer.parseInt(portStr);
+                    if (port < 1 || port > 65535) throw new NumberFormatException("out of range");
+                } catch (NumberFormatException e) {
+                    Toast.makeText(getContext(), R.string.invalid_port, Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                List<String> channels = Server.parseChannels(chanRaw);
+                if (channels.isEmpty()) {
+                    Toast.makeText(getContext(), R.string.enter_at_least_one_channel,
+                            Toast.LENGTH_SHORT).show();
+                    return;
+                }
+
+                Server s = new Server(name, host, port, nickname, channels, password, tls,
+                        sasl ? saslLogin : "", sasl ? saslPassword : "");
+                if (listener != null) listener.onSaved(s, editIndex);
+                dismiss();
+            });
+        }
+    }
+}

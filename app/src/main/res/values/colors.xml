@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_primary">#121212</color>
+    <color name="bg_surface">#1E1E1E</color>
+    <color name="bg_elevated">#2A2A2A</color>
+    <color name="bg_input">#2C2C2E</color>
+    <color name="bg_dialog">#1C1C1E</color>
+
+    <color name="accent">#3A76F0</color>
+    <color name="accent_dim">#1E3F8A</color>
+
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#8E8E93</color>
+    <color name="text_hint">#48484A</color>
+
+    <color name="divider">#2C2C2E</color>
+    <color name="outline">#3A3A3C</color>
+
+    <color name="online">#34C759</color>
+    <color name="lock_icon">#8E8E93</color>
+
+    <color name="bubble_outgoing">#3A76F0</color>
+    <color name="bubble_incoming">#2C2C2E</color>
+</resources>
