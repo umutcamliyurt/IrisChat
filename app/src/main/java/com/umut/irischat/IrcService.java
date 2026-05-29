@@ -39,6 +39,7 @@ import org.pircbotx.hooks.events.QuitEvent;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -56,16 +57,14 @@ import javax.net.ssl.SSLSocketFactory;
 public class IrcService extends Service {
 
     private static final String TAG        = "IrcService";
-    private static final String CHANNEL_ID = "irischat_conn";
-    private static final int    NOTIF_ID   = 1;
+    private static final String CHANNEL_ID  = "irischat_conn";
+    private static final int    NOTIF_ID    = 1;
 
     private static final long RECONNECT_DELAY_BASE_MS = 5_000L;
-    private static final long RECONNECT_DELAY_MAX_MS  = 300_000L;
-    private static final int  MAX_QUEUED_MSGS_PER_TAB = 200;
-
-    private static final int MAX_INBOUND_MSG_BYTES = 8192;
-
-    private static final int MAX_OUTBOUND_MSG_BYTES = 400;
+    private static final long RECONNECT_DELAY_MAX_MS   = 300_000L;
+    private static final int  MAX_QUEUED_MSGS_PER_TAB  = 200;
+    private static final int  MAX_INBOUND_MSG_BYTES    = 8192;
+    private static final int  MAX_OUTBOUND_MSG_BYTES   = 400;
 
     public class LocalBinder extends Binder {
         IrcService getService() { return IrcService.this; }
@@ -108,7 +107,6 @@ public class IrcService extends Service {
 
     private final LinkedBlockingQueue<QueuedMessage> messageQueue =
             new LinkedBlockingQueue<>(MAX_QUEUED_MSGS_PER_TAB * 10);
-
     private final LinkedBlockingQueue<QueuedNotice> noticeQueue =
             new LinkedBlockingQueue<>(200);
 
@@ -153,11 +151,12 @@ public class IrcService extends Service {
     private static class ServerState {
         final Server server;
         volatile PircBotX bot;
-        final AtomicBoolean connected   = new AtomicBoolean(false);
-        final AtomicBoolean shouldRun   = new AtomicBoolean(true);
-        final AtomicInteger retryCount  = new AtomicInteger(0);
-        volatile Future<?>  botFuture;
-        volatile Future<?>  retryFuture;
+        final AtomicBoolean connected = new AtomicBoolean(false);
+        final AtomicBoolean shouldRun = new AtomicBoolean(true);
+        final AtomicBoolean suppressNextDisconnectReconnect = new AtomicBoolean(false);
+        final AtomicInteger retryCount = new AtomicInteger(0);
+        volatile Future<?> botFuture;
+        volatile Future<?> retryFuture;
 
         ServerState(Server s) { this.server = s; }
     }
@@ -436,17 +435,21 @@ public class IrcService extends Service {
                             Log.i(TAG, "Disconnected from " + name);
 
                             if (st.shouldRun.get()) {
-                                long delay = nextDelay(st.retryCount.getAndIncrement());
-                                Log.i(TAG, "Reconnect " + name + " in " + delay + " ms");
-                                scheduleReconnect(st, delay);
+                                if (st.suppressNextDisconnectReconnect.getAndSet(false)) {
+                                    Log.d(TAG, "Skipping reconnect for intentional close: " + name);
+                                } else {
+                                    long delay = nextDelay(st.retryCount.getAndIncrement());
+                                    Log.i(TAG, "Reconnect " + name + " in " + delay + " ms");
+                                    scheduleReconnect(st, delay);
+                                }
                             }
                         }
 
                         @Override
                         public void onMessage(MessageEvent event) {
                             String channel = event.getChannel().getName();
-                            String nick    = event.getUser().getNick();
-                            String text    = event.getMessage();
+                            String nick = event.getUser().getNick();
+                            String text = event.getMessage();
 
                             if (text != null && text.getBytes(StandardCharsets.UTF_8).length
                                     > MAX_INBOUND_MSG_BYTES) {
@@ -454,7 +457,7 @@ public class IrcService extends Service {
                                 return;
                             }
 
-                            String imgUrl  = MainActivity.extractImageUrl(text);
+                            String imgUrl = MainActivity.extractImageUrl(text);
                             String display = imgUrl != null
                                     ? text.replace(imgUrl, "").trim() : text;
                             enqueueOrDeliver(name, channel, nick, display, imgUrl);
@@ -462,8 +465,8 @@ public class IrcService extends Service {
 
                         @Override
                         public void onPrivateMessage(PrivateMessageEvent event) {
-                            String nick   = event.getUser().getNick();
-                            String text   = event.getMessage();
+                            String nick = event.getUser().getNick();
+                            String text = event.getMessage();
 
                             if (text != null && text.getBytes(StandardCharsets.UTF_8).length
                                     > MAX_INBOUND_MSG_BYTES) {
@@ -475,7 +478,8 @@ public class IrcService extends Service {
                                 enqueueOrDeliver(name, nick, nick, text, null);
                                 return;
                             }
-                            String imgUrl  = MainActivity.extractImageUrl(text);
+
+                            String imgUrl = MainActivity.extractImageUrl(text);
                             String display = imgUrl != null
                                     ? text.replace(imgUrl, "").trim() : text;
                             enqueueOrDeliver(name, nick, nick, display, imgUrl);
@@ -519,8 +523,9 @@ public class IrcService extends Service {
                         public void onQuit(QuitEvent event) {
                             mainHandler.postDelayed(() -> {
                                 if (st.bot == null) return;
-                                for (String ch : st.server.getChannels())
+                                for (String ch : st.server.getChannels()) {
                                     notifyMembersChanged(name, ch, st.bot, myNick);
+                                }
                             }, 300);
                         }
                     });
@@ -531,10 +536,86 @@ public class IrcService extends Service {
             }
 
             for (String ch : st.server.getChannels()) builder.addAutoJoinChannel(ch);
-            if (st.server.hasPassword())  builder.setServerPassword(st.server.getPassword());
+            if (st.server.hasPassword()) builder.setServerPassword(st.server.getPassword());
+
             if (st.server.hasSasl()) {
-                builder.addCapHandler(new org.pircbotx.cap.SASLCapHandler(
-                        st.server.getSaslLogin(), st.server.getSaslPassword(), false));
+                final String saslLogin = st.server.getSaslLogin();
+                final String saslPass  = st.server.getSaslPassword();
+
+                builder.addCapHandler(new org.pircbotx.cap.CapHandler() {
+                    private volatile boolean done = false;
+
+                    @Override
+                    public boolean handleLS(org.pircbotx.PircBotX bot,
+                                            com.google.common.collect.ImmutableList<String> capabilities)
+                            throws org.pircbotx.exception.CAPException {
+                        boolean hasSasl = capabilities.stream()
+                                .anyMatch(c -> c.equals("sasl") || c.startsWith("sasl="));
+                        if (hasSasl) {
+                            bot.sendRaw().rawLine("CAP REQ :sasl");
+                        } else {
+                            Log.w(TAG, "Server " + name + " does not advertise SASL");
+                            done = true;
+                            return true;
+                        }
+                        return false;
+                    }
+
+                    @Override
+                    public boolean handleACK(org.pircbotx.PircBotX bot,
+                                             com.google.common.collect.ImmutableList<String> capabilities)
+                            throws org.pircbotx.exception.CAPException {
+                        boolean ackSasl = capabilities.stream()
+                                .anyMatch(c -> c.equals("sasl") || c.startsWith("sasl"));
+                        if (ackSasl) {
+                            bot.sendRaw().rawLine("AUTHENTICATE PLAIN");
+                        }
+                        return false;
+                    }
+
+                    @Override
+                    public boolean handleNAK(org.pircbotx.PircBotX bot,
+                                             com.google.common.collect.ImmutableList<String> capabilities)
+                            throws org.pircbotx.exception.CAPException {
+                        Log.w(TAG, "Server " + name + " NAK'd SASL cap");
+                        done = true;
+                        return true;
+                    }
+
+                    @Override
+                    public boolean handleUnknown(org.pircbotx.PircBotX bot, String rawLine)
+                            throws org.pircbotx.exception.CAPException {
+                        if (rawLine == null || done) return done;
+
+                        String[] parts = rawLine.split(" ");
+                        if (parts.length < 2) return false;
+
+                        boolean isAuthPlus =
+                                (parts[0].equals("AUTHENTICATE") && parts.length >= 2 && parts[1].equals("+")) ||
+                                        (parts.length >= 3 && parts[1].equals("AUTHENTICATE") && parts[2].equals("+"));
+                        if (isAuthPlus) {
+                            String creds = "\0" + saslLogin + "\0" + saslPass;
+                            String encoded = Base64.getEncoder().encodeToString(
+                                    creds.getBytes(StandardCharsets.UTF_8));
+                            bot.sendRaw().rawLine("AUTHENTICATE " + encoded);
+                            return false;
+                        }
+
+                        String numeric = parts[1];
+                        if (numeric.equals("903")) {
+                            bot.sendRaw().rawLine("CAP END");
+                            Log.i(TAG, "SASL PLAIN authenticated on " + name);
+                            done = true;
+                            return true;
+                        }
+                        if (numeric.equals("904") || numeric.equals("905")) {
+                            Log.w(TAG, "SASL auth failed on " + name + ": " + rawLine);
+                            done = true;
+                            return true;
+                        }
+                        return false;
+                    }
+                });
             }
 
             PircBotX bot = new PircBotX(builder.buildConfiguration());
@@ -559,6 +640,7 @@ public class IrcService extends Service {
         } catch (Exception e) {
             Log.e(TAG, "launchBot() error [" + name + "]", e);
             st.connected.set(false);
+            refreshNotification();
             Listener l = listener;
             if (l != null) mainHandler.post(() -> l.onDisconnected(name));
             if (st.shouldRun.get()) scheduleReconnect(st, nextDelay(st.retryCount.getAndIncrement()));
@@ -573,11 +655,16 @@ public class IrcService extends Service {
             try {
                 Thread.sleep(delayMs);
                 if (!st.shouldRun.get()) { releaseWakeLock(); return; }
+
                 Log.i(TAG, "Reconnecting " + st.server.getName() + "…");
 
+                st.suppressNextDisconnectReconnect.set(true);
                 PircBotX old = st.bot;
                 st.bot = null;
-                if (old != null) try { old.close(); } catch (Exception ignored) {}
+                if (old != null) {
+                    try { old.close(); } catch (Exception ignored) {}
+                }
+
                 launchBot(st);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -623,6 +710,7 @@ public class IrcService extends Service {
                 new Intent(this, MainActivity.class)
                         .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
                 PendingIntent.FLAG_IMMUTABLE);
+
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_menu_share)
                 .setContentTitle("IrisChat")
