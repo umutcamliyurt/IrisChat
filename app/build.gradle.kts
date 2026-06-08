@@ -11,7 +11,7 @@ android {
         minSdk = 24
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0.2"
+        versionName = "1.0.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true
 
@@ -56,6 +56,8 @@ android {
             excludes += "META-INF/versions/**"
             excludes += "groovy/**"
             excludes += "org/codehaus/groovy/**"
+            excludes += "**/*.dylib"
+            excludes += "**/*.dll"
         }
         jniLibs {
             useLegacyPackaging = true
