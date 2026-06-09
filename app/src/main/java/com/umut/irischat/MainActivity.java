@@ -243,6 +243,8 @@ public class MainActivity extends AppCompatActivity {
             });
 
             for (Server s : knownServers.values()) ircService.connect(s);
+            ircService.setAppVisible(getLifecycle().getCurrentState()
+                    .isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED));
             refreshStatusBar();
         }
 
@@ -353,6 +355,39 @@ public class MainActivity extends AppCompatActivity {
         Intent serviceIntent = new Intent(this, IrcService.class);
         startService(serviceIntent);
         bindService(serviceIntent, serviceConnection, BIND_AUTO_CREATE);
+
+        handleDmIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleDmIntent(intent);
+    }
+
+    /** Opens the DM tab referenced by a tapped DM notification, if any. */
+    private void handleDmIntent(Intent intent) {
+        if (intent == null) return;
+        String server = intent.getStringExtra(IrcService.EXTRA_DM_SERVER);
+        String nick   = intent.getStringExtra(IrcService.EXTRA_DM_NICK);
+        if (server == null || nick == null) return;
+        intent.removeExtra(IrcService.EXTRA_DM_SERVER);
+        intent.removeExtra(IrcService.EXTRA_DM_NICK);
+        if (!isValidNick(nick)) return;
+        openDmTab(server, nick);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (serviceBound && ircService != null) ircService.setAppVisible(true);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (serviceBound && ircService != null) ircService.setAppVisible(false);
     }
 
     @Override

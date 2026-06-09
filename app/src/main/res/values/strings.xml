@@ -123,4 +123,21 @@ Session fingerprint (verify out-of-band):
     <string name="lang_english">English</string>
     <string name="lang_turkish">Türkçe</string>
     <string name="lang_russian">Русский</string>
+
+    <string name="notif_channel_connection">IRC Connection</string>
+    <string name="notif_channel_connection_desc">Keeps IRC connections alive in the background</string>
+    <string name="notif_channel_dms">Direct Messages</string>
+    <string name="notif_channel_dms_desc">Notifications for incoming direct messages</string>
+    <string name="notif_idle">Idle</string>
+    <string name="notif_no_active_connections">No active connections</string>
+    <string name="notif_connected_to">Connected: %s</string>
+    <string name="notif_dm_title">%1$s (%2$s)</string>
+    <string name="notif_dm_public">New direct message</string>
+    <string name="notif_dm_new_message">New message</string>
+    <string name="notif_dm_image">Sent an image</string>
+    <string name="notif_dm_count_prefix">(%1$d) %2$s</string>
+    <plurals name="notif_dm_encrypted">
+        <item quantity="one">Encrypted message</item>
+        <item quantity="other">%d new encrypted messages</item>
+    </plurals>
 </resources>

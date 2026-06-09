@@ -122,4 +122,20 @@ Oturum parmak izi (bant dışı doğrulayın):
     <string name="lang_english">English</string>
     <string name="lang_turkish">Türkçe</string>
     <string name="lang_russian">Русский</string>
+    <string name="notif_channel_connection">IRC Bağlantısı</string>
+    <string name="notif_channel_connection_desc">IRC bağlantılarını arka planda canlı tutar</string>
+    <string name="notif_channel_dms">Doğrudan Mesajlar</string>
+    <string name="notif_channel_dms_desc">Gelen doğrudan mesajlar için bildirimler</string>
+    <string name="notif_idle">Boşta</string>
+    <string name="notif_no_active_connections">Etkin bağlantı yok</string>
+    <string name="notif_connected_to">Bağlı: %s</string>
+    <string name="notif_dm_title">%1$s (%2$s)</string>
+    <string name="notif_dm_public">Yeni doğrudan mesaj</string>
+    <string name="notif_dm_new_message">Yeni mesaj</string>
+    <string name="notif_dm_image">Bir görsel gönderildi</string>
+    <string name="notif_dm_count_prefix">(%1$d) %2$s</string>
+    <plurals name="notif_dm_encrypted">
+        <item quantity="one">Şifreli mesaj</item>
+        <item quantity="other">%d yeni şifreli mesaj</item>
+    </plurals>
 </resources>

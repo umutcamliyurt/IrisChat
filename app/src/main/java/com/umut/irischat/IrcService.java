@@ -60,6 +60,13 @@ public class IrcService extends Service {
     private static final String CHANNEL_ID  = "irischat_conn";
     private static final int    NOTIF_ID    = 1;
 
+    private static final String DM_CHANNEL_ID     = "irischat_dms";
+    private static final int    DM_NOTIF_ID_BASE  = 1000;
+    private static final long   DM_ALERT_THROTTLE_MS = 2_000L;
+
+    public static final String EXTRA_DM_SERVER = "com.umut.irischat.extra.DM_SERVER";
+    public static final String EXTRA_DM_NICK   = "com.umut.irischat.extra.DM_NICK";
+
     private static final long RECONNECT_DELAY_BASE_MS = 5_000L;
     private static final long RECONNECT_DELAY_MAX_MS   = 300_000L;
     private static final int  MAX_QUEUED_MSGS_PER_TAB  = 200;
@@ -87,6 +94,30 @@ public class IrcService extends Service {
 
     private volatile Listener listener;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+
+    private volatile boolean appVisible = false;
+
+    private final Map<String, Integer> dmNotifIds =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, Integer> dmUnreadCounts =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, Long> dmLastAlertMs =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final AtomicInteger nextDmNotifId = new AtomicInteger(DM_NOTIF_ID_BASE);
+
+    public void setAppVisible(boolean visible) {
+        appVisible = visible;
+        if (visible) cancelDmNotifications();
+    }
+
+    public void cancelDmNotifications() {
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm != null) {
+            for (Integer id : dmNotifIds.values()) nm.cancel(id);
+        }
+        dmUnreadCounts.clear();
+        dmLastAlertMs.clear();
+    }
 
     public void setListener(Listener l) {
         this.listener = l;
@@ -240,7 +271,7 @@ public class IrcService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        startForeground(NOTIF_ID, buildNotification("Idle"));
+        startForeground(NOTIF_ID, buildNotification(getString(R.string.notif_idle)));
         return START_STICKY;
     }
 
@@ -476,6 +507,7 @@ public class IrcService extends Service {
 
                             if (SignalStore.isSignalMessage(text)) {
                                 enqueueOrDeliver(name, nick, nick, text, null);
+                                maybeNotifyDm(name, nick, null, null, true);
                                 return;
                             }
 
@@ -483,6 +515,7 @@ public class IrcService extends Service {
                             String display = imgUrl != null
                                     ? text.replace(imgUrl, "").trim() : text;
                             enqueueOrDeliver(name, nick, nick, display, imgUrl);
+                            maybeNotifyDm(name, nick, display, imgUrl, false);
                         }
 
                         @Override
@@ -682,14 +715,14 @@ public class IrcService extends Service {
         List<Server> connected = getConnectedServers();
         String text;
         if (connected.isEmpty()) {
-            text = "No active connections";
+            text = getString(R.string.notif_no_active_connections);
         } else {
             StringBuilder sb = new StringBuilder();
             for (Server s : connected) {
                 if (sb.length() > 0) sb.append(", ");
                 sb.append(s.getName());
             }
-            text = "Connected: " + sb;
+            text = getString(R.string.notif_connected_to, sb.toString());
         }
         updateNotification(text);
     }
@@ -697,10 +730,19 @@ public class IrcService extends Service {
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel ch = new NotificationChannel(
-                    CHANNEL_ID, "IRC Connection",
+                    CHANNEL_ID, getString(R.string.notif_channel_connection),
                     NotificationManager.IMPORTANCE_LOW);
-            ch.setDescription("Keeps IRC connections alive in the background");
-            getSystemService(NotificationManager.class).createNotificationChannel(ch);
+            ch.setDescription(getString(R.string.notif_channel_connection_desc));
+
+            NotificationChannel dm = new NotificationChannel(
+                    DM_CHANNEL_ID, getString(R.string.notif_channel_dms),
+                    NotificationManager.IMPORTANCE_HIGH);
+            dm.setDescription(getString(R.string.notif_channel_dms_desc));
+            dm.setLockscreenVisibility(Notification.VISIBILITY_PRIVATE);
+
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            nm.createNotificationChannel(ch);
+            nm.createNotificationChannel(dm);
         }
     }
 
@@ -713,7 +755,7 @@ public class IrcService extends Service {
 
         return new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_menu_share)
-                .setContentTitle("IrisChat")
+                .setContentTitle(getString(R.string.app_name))
                 .setContentText(text)
                 .setContentIntent(pi)
                 .setOngoing(true)
@@ -723,5 +765,75 @@ public class IrcService extends Service {
     private void updateNotification(String text) {
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm != null) nm.notify(NOTIF_ID, buildNotification(text));
+    }
+
+    private void maybeNotifyDm(String serverName, String fromNick,
+                               String preview, String imageUrl, boolean encrypted) {
+        if (appVisible && listener != null) return;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+
+        final String key = serverName + "/" + fromNick;
+        int count = dmUnreadCounts.merge(key, 1, Integer::sum);
+
+        long now = System.currentTimeMillis();
+        Long last = dmLastAlertMs.get(key);
+        boolean silentUpdate = last != null && (now - last) < DM_ALERT_THROTTLE_MS;
+        if (!silentUpdate) dmLastAlertMs.put(key, now);
+
+        String body;
+        if (encrypted) {
+            body = getResources().getQuantityString(
+                    R.plurals.notif_dm_encrypted, count, count);
+        } else {
+            String base;
+            if (preview == null || preview.isEmpty()) {
+                base = imageUrl != null
+                        ? getString(R.string.notif_dm_image)
+                        : getString(R.string.notif_dm_new_message);
+            } else {
+                base = preview;
+            }
+            body = count > 1
+                    ? getString(R.string.notif_dm_count_prefix, count, base)
+                    : base;
+        }
+
+        int id = dmNotifIds.computeIfAbsent(key, k -> nextDmNotifId.getAndIncrement());
+
+        Intent open = new Intent(this, MainActivity.class)
+                .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(EXTRA_DM_SERVER, serverName)
+                .putExtra(EXTRA_DM_NICK, fromNick);
+        PendingIntent pi = PendingIntent.getActivity(
+                this, id, open,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        Notification publicVersion = new NotificationCompat.Builder(this, DM_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_dialog_email)
+                .setContentTitle(getString(R.string.app_name))
+                .setContentText(getString(R.string.notif_dm_public))
+                .build();
+
+        Notification n = new NotificationCompat.Builder(this, DM_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_dialog_email)
+                .setContentTitle(getString(R.string.notif_dm_title, fromNick, serverName))
+                .setContentText(body)
+                .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+                .setPublicVersion(publicVersion)
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(silentUpdate)
+                .setNumber(count)
+                .build();
+
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm != null) nm.notify(id, n);
     }
 }

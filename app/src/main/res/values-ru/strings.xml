@@ -122,4 +122,22 @@
     <string name="lang_english">English</string>
     <string name="lang_turkish">Türkçe</string>
     <string name="lang_russian">Русский</string>
+    <string name="notif_channel_connection">IRC-соединение</string>
+    <string name="notif_channel_connection_desc">Поддерживает IRC-соединения в фоновом режиме</string>
+    <string name="notif_channel_dms">Личные сообщения</string>
+    <string name="notif_channel_dms_desc">Уведомления о входящих личных сообщениях</string>
+    <string name="notif_idle">Ожидание</string>
+    <string name="notif_no_active_connections">Нет активных соединений</string>
+    <string name="notif_connected_to">Подключено: %s</string>
+    <string name="notif_dm_title">%1$s (%2$s)</string>
+    <string name="notif_dm_public">Новое личное сообщение</string>
+    <string name="notif_dm_new_message">Новое сообщение</string>
+    <string name="notif_dm_image">Прислано изображение</string>
+    <string name="notif_dm_count_prefix">(%1$d) %2$s</string>
+    <plurals name="notif_dm_encrypted">
+        <item quantity="one">%d новое зашифрованное сообщение</item>
+        <item quantity="few">%d новых зашифрованных сообщения</item>
+        <item quantity="many">%d новых зашифрованных сообщений</item>
+        <item quantity="other">%d новых зашифрованных сообщения</item>
+    </plurals>
 </resources>
