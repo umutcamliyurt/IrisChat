@@ -1,8 +1,12 @@
 package com.umut.irischat;
 
+import android.app.Activity;
+import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.view.View;
+import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -11,6 +15,8 @@ import com.google.android.material.tabs.TabLayout;
 public class ThemeHelper {
 
     static final String KEY_ACCENT_COLOR = "accent_color";
+
+    private static final String PLAIN_PREFS = "theme_prefs";
 
     static final String[] ACCENT_LABELS = {
             "Blue", "Purple", "Pink", "Red", "Orange", "Green", "Teal"
@@ -36,12 +42,46 @@ public class ThemeHelper {
         return ACCENT_COLORS[0];
     }
 
-    static void saveAccent(CryptoStore crypto, int color) {
-        crypto.putString(KEY_ACCENT_COLOR, String.format("#%06X", 0xFFFFFF & color));
+    static void saveAccent(Context ctx, CryptoStore crypto, int color) {
+        String hex = String.format("#%06X", 0xFFFFFF & color);
+        crypto.putString(KEY_ACCENT_COLOR, hex);
+        ctx.getApplicationContext()
+                .getSharedPreferences(PLAIN_PREFS, Context.MODE_PRIVATE)
+                .edit().putString(KEY_ACCENT_COLOR, hex).apply();
+    }
+
+    static int getAccentPreUnlock(Context ctx) {
+        String stored = ctx.getApplicationContext()
+                .getSharedPreferences(PLAIN_PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_ACCENT_COLOR, null);
+        if (stored != null) {
+            try { return Color.parseColor(stored); }
+            catch (IllegalArgumentException ignored) {}
+        }
+        return ACCENT_COLORS[0];
+    }
+
+    static void applyToUnlock(Activity activity) {
+        int accent = getAccentPreUnlock(activity);
+        currentAccent = accent;
+        ColorStateList csl = ColorStateList.valueOf(accent);
+
+        ImageView lockIcon = activity.findViewById(R.id.unlockLockIcon);
+        if (lockIcon != null) lockIcon.setImageTintList(csl);
+
+        Button unlockButton = activity.findViewById(R.id.unlockButton);
+        if (unlockButton != null) unlockButton.setBackgroundTintList(csl);
     }
 
     static void apply(MainActivity activity, CryptoStore crypto) {
         currentAccent = getAccent(crypto);
+
+        activity.getApplicationContext()
+                .getSharedPreferences(PLAIN_PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_ACCENT_COLOR, String.format("#%06X", 0xFFFFFF & currentAccent))
+                .apply();
+
         ColorStateList csl = ColorStateList.valueOf(currentAccent);
 
         activity.tabLayout.setSelectedTabIndicatorColor(currentAccent);

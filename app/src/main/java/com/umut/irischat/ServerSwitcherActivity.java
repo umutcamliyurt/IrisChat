@@ -175,7 +175,7 @@ public class ServerSwitcherActivity extends AppCompatActivity {
             swatch.setContentDescription(label);
 
             swatch.setOnClickListener(v -> {
-                ThemeHelper.saveAccent(crypto, color);
+                ThemeHelper.saveAccent(this, crypto, color);
                 for (int j = 0; j < swatchRow.getChildCount(); j++) {
                     android.widget.FrameLayout s =
                             (android.widget.FrameLayout) swatchRow.getChildAt(j);

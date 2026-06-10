@@ -57,6 +57,8 @@ public class UnlockActivity extends AppCompatActivity {
         unlockButton     = findViewById(R.id.unlockButton);
         toggleVisibility = findViewById(R.id.toggleUnlockVisibility);
 
+        ThemeHelper.applyToUnlock(this);
+
         if (isFirstRun) {
             titleView.setText(R.string.create_password_title);
             subtitleView.setText(R.string.create_password_subtitle);

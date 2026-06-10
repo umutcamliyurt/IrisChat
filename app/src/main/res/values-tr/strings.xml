@@ -86,6 +86,18 @@
 Oturum parmak izi (bant dışı doğrulayın):
 %s</string>
     <string name="encrypted_message_failed">[Şifreli mesaj — çözülemedi]</string>
+    <string name="e2e_key_changed_warning">⚠️ GÜVENLİK UYARISI: %1$s için şifreleme kimliği DEĞİŞTİ. Bu, karşı tarafın uygulamayı yeniden yüklemesiyle olabilir; ancak birinin onun yerine geçmeye çalıştığı anlamına da gelebilir. Yeni güvenlik numarasını karşı tarafla ayrı ve güvenilir bir kanaldan (yüz yüze, telefonla vb.) doğrulamadan yeni anahtara GÜVENMEYİN.</string>
+    <string name="e2e_key_changed_fingerprints">\n\nÖnceki: %1$s\nYeni: %2$s\n\nMenüyü açmak için bu DM sekmesine uzun basın, ardından yeni anahtarı kabul edin veya reddedin.</string>
+    <string name="e2e_key_changed_toast">%1$s kişisinin şifreleme anahtarı değişti — güvenmeden önce doğrulayın</string>
+    <string name="accept_changed_key">Değişen anahtarı kabul et (önce doğrulayın!)</string>
+    <string name="reject_changed_key">Değişen anahtarı reddet</string>
+    <string name="pending_fingerprint_label">Yeni (doğrulanmamış) anahtar:
+</string>
+    <string name="e2e_key_accepted">✅ %1$s için yeni şifreleme anahtarı kabul edildi.</string>
+    <string name="e2e_key_accepted_toast">%1$s için yeni anahtar kabul edildi</string>
+    <string name="e2e_key_rejected">%1$s için değişen şifreleme anahtarı reddedildi. Mesajlar hâlâ önceden doğrulanmış anahtarı kullanıyor.</string>
+    <string name="e2e_key_rejected_toast">%1$s için yeni anahtar reddedildi</string>
+    <string name="e2e_pending_send_warning">Dikkat: %1$s yeni (doğrulanmamış) bir anahtar gönderdi. Şifreleme önceden doğrulanmış anahtarla sürüyor — anahtarı DM menüsünden inceleyin.</string>
     <string name="signal_menu_title">%s ile Signal E2E</string>
     <string name="session_fingerprint_label">Oturum parmak izi:
 </string>

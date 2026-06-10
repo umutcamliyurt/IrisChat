@@ -87,6 +87,18 @@ Message NOT sent.</string>
 Session fingerprint (verify out-of-band):
 %s</string>
     <string name="encrypted_message_failed">[Encrypted message — could not decrypt]</string>
+    <string name="e2e_key_changed_warning">⚠️ SECURITY WARNING: the encryption identity for %1$s has CHANGED. This can happen if they reinstalled the app, but it can also mean someone is impersonating them. Do NOT trust it until you verify the new safety number with them over a separate trusted channel (in person, a phone call, etc.).</string>
+    <string name="e2e_key_changed_fingerprints">\n\nPrevious: %1$s\nNew: %2$s\n\nLong-press this DM tab to open the menu, then Accept or Reject the new key.</string>
+    <string name="e2e_key_changed_toast">%1$s\'s encryption key changed — verify before trusting</string>
+    <string name="accept_changed_key">Accept changed key (verify first!)</string>
+    <string name="reject_changed_key">Reject changed key</string>
+    <string name="pending_fingerprint_label">New (unverified) key:
+</string>
+    <string name="e2e_key_accepted">✅ New encryption key for %1$s accepted.</string>
+    <string name="e2e_key_accepted_toast">Accepted new key for %1$s</string>
+    <string name="e2e_key_rejected">Rejected the changed encryption key for %1$s. Messages still use the previously verified key.</string>
+    <string name="e2e_key_rejected_toast">Rejected new key for %1$s</string>
+    <string name="e2e_pending_send_warning">Heads up: %1$s sent a new (unverified) key. Still encrypting to the previously verified key — review it from the DM menu.</string>
     <string name="signal_menu_title">Signal E2E with %s</string>
     <string name="session_fingerprint_label">Session fingerprint:
 </string>
@@ -123,7 +135,6 @@ Session fingerprint (verify out-of-band):
     <string name="lang_english">English</string>
     <string name="lang_turkish">Türkçe</string>
     <string name="lang_russian">Русский</string>
-
     <string name="notif_channel_connection">IRC Connection</string>
     <string name="notif_channel_connection_desc">Keeps IRC connections alive in the background</string>
     <string name="notif_channel_dms">Direct Messages</string>

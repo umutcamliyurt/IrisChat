@@ -198,31 +198,43 @@ public class MainActivity extends AppCompatActivity {
                                 }
                             }
 
-                            boolean hadBundleBefore = signalStore.hasContactBundle(fromNick);
-                            String oldFp = hadBundleBefore
-                                    ? signalStore.contactFingerprint(fromNick) : null;
+                            SignalStore.BundleClassification c =
+                                    signalStore.classifyIncomingBundle(fromNick, bundle);
 
-                            String incomingFp = signalStore.peekBundleFingerprint(bundle);
-                            if (incomingFp == null) return;
+                            switch (c.status) {
+                                case INVALID:
+                                case UNCHANGED:
+                                    return;
 
-                            if (hadBundleBefore && incomingFp.equals(oldFp)) {
-                                return;
+                                case NEW: {
+                                    announceKeyTo(serverName, fromNick);
+                                    String combinedFp = signalStore.combinedFingerprint(fromNick);
+                                    String infoText = getString(R.string.e2e_enabled, fromNick)
+                                            + (combinedFp != null
+                                            ? getString(R.string.e2e_fingerprint_suffix, combinedFp)
+                                            : "");
+                                    appendToTab(dmKey, new ChatMessage(
+                                            null, infoText, ChatMessage.Type.SYSTEM));
+                                    runOnUiThread(() -> refreshTabLabel(dmKey));
+                                    break;
+                                }
+
+                                case CHANGED: {
+                                    String warn = getString(
+                                            R.string.e2e_key_changed_warning, fromNick)
+                                            + getString(R.string.e2e_key_changed_fingerprints,
+                                            c.oldFingerprint, c.newFingerprint);
+                                    appendToTab(dmKey, new ChatMessage(
+                                            null, warn, ChatMessage.Type.SYSTEM));
+                                    runOnUiThread(() -> {
+                                        refreshTabLabel(dmKey);
+                                        Toast.makeText(MainActivity.this,
+                                                getString(R.string.e2e_key_changed_toast, fromNick),
+                                                Toast.LENGTH_LONG).show();
+                                    });
+                                    break;
+                                }
                             }
-
-                            String fingerprint = signalStore.storeBundleForNick(fromNick, bundle);
-                            if (fingerprint == null) return;
-
-                            announceKeyTo(serverName, fromNick);
-
-                            String combinedFp = signalStore.combinedFingerprint(fromNick);
-                            String infoText = getString(R.string.e2e_enabled, fromNick)
-                                    + (combinedFp != null
-                                    ? getString(R.string.e2e_fingerprint_suffix, combinedFp)
-                                    : "");
-
-                            appendToTab(dmKey, new ChatMessage(
-                                    null, infoText, ChatMessage.Type.SYSTEM));
-                            runOnUiThread(() -> refreshTabLabel(dmKey));
                         } catch (Exception e) {
                             android.util.Log.w("MainActivity",
                                     "Failed to process key chunk from " + fromNick, e);
@@ -797,6 +809,11 @@ public class MainActivity extends AppCompatActivity {
                         getString(R.string.no_signal_identity),
                         Toast.LENGTH_LONG).show();
             } else {
+                if (signalStore.hasPendingIdentity(channel)) {
+                    Toast.makeText(this,
+                            getString(R.string.e2e_pending_send_warning, channel),
+                            Toast.LENGTH_LONG).show();
+                }
                 try {
                     wireLines    = signalStore.encryptForWire(channel, message);
                     e2eEncrypted = true;
@@ -1025,9 +1042,23 @@ public class MainActivity extends AppCompatActivity {
 
         boolean hasContact = signalStore.hasContactBundle(nick);
         String combinedFp  = hasContact ? signalStore.combinedFingerprint(nick) : null;
+        boolean hasPending = signalStore.hasPendingIdentity(nick);
+        String pendingFp   = hasPending ? signalStore.pendingFingerprint(nick) : null;
 
         java.util.List<String> keys = new java.util.ArrayList<>();
         java.util.List<CharSequence> labels = new java.util.ArrayList<>();
+
+        if (hasPending) {
+            if (pendingFp != null) {
+                keys.add("pending_fp");
+                labels.add(coloredFingerprint(
+                        getString(R.string.pending_fingerprint_label), pendingFp));
+            }
+            keys.add("accept_pending");
+            labels.add(getString(R.string.accept_changed_key));
+            keys.add("reject_pending");
+            labels.add(getString(R.string.reject_changed_key));
+        }
 
         if (hasContact && combinedFp != null) {
             keys.add("combined_fp");
@@ -1065,6 +1096,39 @@ public class MainActivity extends AppCompatActivity {
                 .setAdapter(adapter, (d, which) -> {
                     String key = keys.get(which);
                     switch (key) {
+                        case "pending_fp": {
+                            android.content.ClipboardManager cm = (android.content.ClipboardManager)
+                                    getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                            if (cm != null && pendingFp != null) cm.setPrimaryClip(
+                                    android.content.ClipData.newPlainText("fingerprint", pendingFp));
+                            Toast.makeText(this, getString(R.string.fingerprint_copied), Toast.LENGTH_SHORT).show();
+                            break;
+                        }
+                        case "accept_pending": {
+                            String serverName = tabKey.contains("/")
+                                    ? tabKey.substring(0, tabKey.indexOf('/')) : null;
+                            String newCombined = signalStore.acceptPendingIdentity(nick);
+                            refreshTabLabel(tabKey);
+                            if (serverName != null) announceKeyTo(serverName, nick);
+                            String info = getString(R.string.e2e_key_accepted, nick)
+                                    + (newCombined != null
+                                    ? getString(R.string.e2e_fingerprint_suffix, newCombined) : "");
+                            appendToTab(tabKey, new ChatMessage(null, info, ChatMessage.Type.SYSTEM));
+                            Toast.makeText(this,
+                                    getString(R.string.e2e_key_accepted_toast, nick),
+                                    Toast.LENGTH_SHORT).show();
+                            break;
+                        }
+                        case "reject_pending": {
+                            signalStore.rejectPendingIdentity(nick);
+                            appendToTab(tabKey, new ChatMessage(
+                                    null, getString(R.string.e2e_key_rejected, nick),
+                                    ChatMessage.Type.SYSTEM));
+                            Toast.makeText(this,
+                                    getString(R.string.e2e_key_rejected_toast, nick),
+                                    Toast.LENGTH_SHORT).show();
+                            break;
+                        }
                         case "combined_fp": {
                             android.content.ClipboardManager cm = (android.content.ClipboardManager)
                                     getSystemService(android.content.Context.CLIPBOARD_SERVICE);

@@ -6,11 +6,7 @@ import android.util.Log;
 import org.signal.libsignal.protocol.DuplicateMessageException;
 import org.signal.libsignal.protocol.IdentityKey;
 import org.signal.libsignal.protocol.IdentityKeyPair;
-import org.signal.libsignal.protocol.InvalidKeyException;
 import org.signal.libsignal.protocol.InvalidMessageException;
-import org.signal.libsignal.protocol.InvalidVersionException;
-import org.signal.libsignal.protocol.LegacyMessageException;
-import org.signal.libsignal.protocol.NoSessionException;
 import org.signal.libsignal.protocol.SessionBuilder;
 import org.signal.libsignal.protocol.SessionCipher;
 import org.signal.libsignal.protocol.SignalProtocolAddress;
@@ -69,6 +65,8 @@ public final class SignalStore {
     private static final String KEY_CPK_PFX        = "signal_cpk/";
     private static final String KEY_BUNDLE_PFX     = "signal_bundle/";
     private static final String KEY_IDKEY_PFX      = "signal_idkey/";
+    private static final String KEY_PENDING_PFX    = "signal_pending/";
+    static final String KEY_SESSION_PFX            = "signal_sess/";
 
     private static final int SPK_ID    = 1;
     private static final int KPK_ID    = 1;
@@ -84,6 +82,12 @@ public final class SignalStore {
     private final Map<String, PreKeyRecord> contactPreKeys = new ConcurrentHashMap<>();
 
     private final Map<String, IrcSignalStore> stores = new ConcurrentHashMap<>();
+
+    private final Map<String, Object> nickLocks = new ConcurrentHashMap<>();
+
+    private Object lockFor(String nick) {
+        return nickLocks.computeIfAbsent(lc(nick), k -> new Object());
+    }
 
     public SignalStore(CryptoStore crypto) {
         this.crypto = crypto;
@@ -308,6 +312,79 @@ public final class SignalStore {
         }
     }
 
+    public enum BundleStatus { NEW, UNCHANGED, CHANGED, INVALID }
+
+    public static final class BundleClassification {
+        public final BundleStatus status;
+        public final String       oldFingerprint;
+        public final String       newFingerprint;
+        BundleClassification(BundleStatus s, String oldFp, String newFp) {
+            this.status = s; this.oldFingerprint = oldFp; this.newFingerprint = newFp;
+        }
+    }
+
+    public BundleClassification classifyIncomingBundle(String nick, byte[] bundle) {
+        String incomingIdFp = peekBundleFingerprint(bundle);
+        if (incomingIdFp == null) {
+            return new BundleClassification(BundleStatus.INVALID, null, null);
+        }
+        synchronized (lockFor(nick)) {
+            String oldIdFp = contactFingerprint(nick);
+            if (oldIdFp == null) {
+                String fp = storeBundleForNick(nick, bundle);
+                if (fp == null) return new BundleClassification(BundleStatus.INVALID, null, null);
+                crypto.remove(KEY_PENDING_PFX + lc(nick));
+                return new BundleClassification(BundleStatus.NEW, null, combinedFingerprint(nick));
+            }
+            if (incomingIdFp.equals(oldIdFp)) {
+                crypto.remove(KEY_PENDING_PFX + lc(nick));
+                String fp = combinedFingerprint(nick);
+                return new BundleClassification(BundleStatus.UNCHANGED, fp, fp);
+            }
+            crypto.putString(KEY_PENDING_PFX + lc(nick), b64(bundle));
+            Log.w(TAG, "Identity key CHANGED for " + nick + " — parked as pending, awaiting user review");
+            return new BundleClassification(BundleStatus.CHANGED,
+                    combinedFingerprint(nick),
+                    combinedBundleFingerprint(bundle));
+        }
+    }
+
+    public boolean hasPendingIdentity(String nick) {
+        return crypto.contains(KEY_PENDING_PFX + lc(nick));
+    }
+
+    public String pendingFingerprint(String nick) {
+        String raw = crypto.getString(KEY_PENDING_PFX + lc(nick), null);
+        if (raw == null) return null;
+        try {
+            return combinedBundleFingerprint(unb64(raw));
+        } catch (Exception e) { return null; }
+    }
+
+    public String acceptPendingIdentity(String nick) {
+        synchronized (lockFor(nick)) {
+            String raw = crypto.getString(KEY_PENDING_PFX + lc(nick), null);
+            if (raw == null) return null;
+            byte[] bundle;
+            try { bundle = unb64(raw); }
+            catch (Exception e) { crypto.remove(KEY_PENDING_PFX + lc(nick)); return null; }
+
+            crypto.remove(KEY_SESSION_PFX + lc(nick));
+            stores.remove(lc(nick));
+
+            String fp = storeBundleForNick(nick, bundle);
+            crypto.remove(KEY_PENDING_PFX + lc(nick));
+            if (fp == null) return null;
+            Log.i(TAG, "Pending identity for " + nick + " accepted by user");
+            return combinedFingerprint(nick);
+        }
+    }
+
+    public void rejectPendingIdentity(String nick) {
+        crypto.remove(KEY_PENDING_PFX + lc(nick));
+        Log.i(TAG, "Pending identity for " + nick + " rejected by user");
+    }
+
     public String contactFingerprint(String nick) {
         String raw = crypto.getString(KEY_IDKEY_PFX + lc(nick), null);
         if (raw == null) return null;
@@ -316,18 +393,29 @@ public final class SignalStore {
         } catch (Exception e) { return null; }
     }
 
-    public String ownFingerprint() {
-        if (identityKeyPair == null) return null;
-        return fingerprint(identityKeyPair.getPublicKey().getPublicKey().serialize());
-    }
-
     public String combinedFingerprint(String nick) {
-        if (identityKeyPair == null) return null;
         String raw = crypto.getString(KEY_IDKEY_PFX + lc(nick), null);
         if (raw == null) return null;
         try {
+            return combinedFingerprintFor(unb64(raw));
+        } catch (Exception e) { return null; }
+    }
+
+    public String combinedBundleFingerprint(byte[] bundle) {
+        try {
+            java.io.DataInputStream in = din(bundle);
+            in.readInt();
+            byte[] idKeyBytes = readBlob(in);
+            return combinedFingerprintFor(idKeyBytes);
+        } catch (Exception e) { return null; }
+    }
+
+    private String combinedFingerprintFor(byte[] contactIdKeySerialized) {
+        if (identityKeyPair == null) return null;
+        try {
             byte[] ownBytes     = identityKeyPair.getPublicKey().getPublicKey().serialize();
-            byte[] contactBytes = new IdentityKey(unb64(raw), 0).getPublicKey().serialize();
+            byte[] contactBytes = new IdentityKey(contactIdKeySerialized, 0)
+                    .getPublicKey().serialize();
             int cmp = 0;
             int minLen = Math.min(ownBytes.length, contactBytes.length);
             for (int i = 0; i < minLen && cmp == 0; i++)
@@ -346,6 +434,8 @@ public final class SignalStore {
         crypto.remove(KEY_BUNDLE_PFX + lc(nick));
         crypto.remove(KEY_IDKEY_PFX  + lc(nick));
         crypto.remove(KEY_CPK_PFX    + lc(nick));
+        crypto.remove(KEY_PENDING_PFX + lc(nick));
+        crypto.remove(KEY_SESSION_PFX + lc(nick));
         contactPreKeys.remove(lc(nick));
         stores.remove(lc(nick));
         chunkStore.remove(lc(nick));
@@ -356,31 +446,33 @@ public final class SignalStore {
 
     public List<String> encryptForWire(String nick, String plaintext) throws Exception {
         if (!hasIdentity()) throw new IllegalStateException("No Signal identity");
-        IrcSignalStore store = getOrCreate(nick);
-        SignalProtocolAddress addr = addr(nick);
+        synchronized (lockFor(nick)) {
+            IrcSignalStore store = getOrCreate(nick);
+            SignalProtocolAddress addr = addr(nick);
 
-        if (!store.containsSession(addr)) buildSession(nick, store, addr);
+            if (!store.containsSession(addr)) buildSession(nick, store, addr);
 
-        SessionCipher cipher = new SessionCipher(store, store, store, store, store, addr);
-        CiphertextMessage msg = cipher.encrypt(plaintext.getBytes(StandardCharsets.UTF_8));
+            SessionCipher cipher = new SessionCipher(store, store, store, store, store, addr);
+            CiphertextMessage msg = cipher.encrypt(plaintext.getBytes(StandardCharsets.UTF_8));
 
-        byte[] msgBytes = msg.serialize();
-        byte[] raw = new byte[1 + msgBytes.length];
-        raw[0] = (byte) msg.getType();
-        System.arraycopy(msgBytes, 0, raw, 1, msgBytes.length);
+            byte[] msgBytes = msg.serialize();
+            byte[] raw = new byte[1 + msgBytes.length];
+            raw[0] = (byte) msg.getType();
+            System.arraycopy(msgBytes, 0, raw, 1, msgBytes.length);
 
-        store.flushSession(addr, nick);
+            store.flushSession(addr, nick);
 
-        String token = randomToken();
-        int total = (raw.length + CHUNK_BYTES - 1) / CHUNK_BYTES;
-        List<String> lines = new ArrayList<>(total);
-        for (int i = 0; i < total; i++) {
-            int from  = i * CHUNK_BYTES;
-            int to    = Math.min(from + CHUNK_BYTES, raw.length);
-            lines.add(MSG_PREFIX + token + ":" + total + ":" + i + ":"
-                    + b64(Arrays.copyOfRange(raw, from, to)));
+            String token = randomToken();
+            int total = (raw.length + CHUNK_BYTES - 1) / CHUNK_BYTES;
+            List<String> lines = new ArrayList<>(total);
+            for (int i = 0; i < total; i++) {
+                int from  = i * CHUNK_BYTES;
+                int to    = Math.min(from + CHUNK_BYTES, raw.length);
+                lines.add(MSG_PREFIX + token + ":" + total + ":" + i + ":"
+                        + b64(Arrays.copyOfRange(raw, from, to)));
+            }
+            return lines;
         }
-        return lines;
     }
 
     public static final class DecryptResult {
@@ -473,36 +565,35 @@ public final class SignalStore {
 
         IrcSignalStore store  = getOrCreate(nick);
         SignalProtocolAddress addr  = addr(nick);
-        SessionCipher  cipher = new SessionCipher(store, store, store, store, store, addr);
         byte[]         plain;
 
-        try {
-            if (type == CiphertextMessage.PREKEY_TYPE) {
-                plain = cipher.decrypt(new PreKeySignalMessage(cipherBytes));
-            } else if (type == CiphertextMessage.WHISPER_TYPE) {
-                if (!store.containsSession(addr)) {
-                    Log.w(TAG, "receiveMsgChunk: WhisperMessage with no session from " + nick
-                            + " — cannot decrypt");
+        synchronized (lockFor(nick)) {
+            SessionCipher cipher = new SessionCipher(store, store, store, store, store, addr);
+            try {
+                if (type == CiphertextMessage.PREKEY_TYPE) {
+                    plain = cipher.decrypt(new PreKeySignalMessage(cipherBytes));
+                } else if (type == CiphertextMessage.WHISPER_TYPE) {
+                    if (!store.containsSession(addr)) {
+                        Log.w(TAG, "receiveMsgChunk: WhisperMessage with no session from " + nick
+                                + " — cannot decrypt");
+                        return null;
+                    }
+                    plain = cipher.decrypt(new SignalMessage(cipherBytes));
+                } else {
+                    Log.w(TAG, "receiveMsgChunk: unknown type " + type + " from " + nick);
                     return null;
                 }
-                plain = cipher.decrypt(new SignalMessage(cipherBytes));
-            } else {
-                Log.w(TAG, "receiveMsgChunk: unknown type " + type + " from " + nick);
+            } catch (DuplicateMessageException e) {
+                Log.w(TAG, "receiveMsgChunk: duplicate from " + nick);
                 return null;
+            } catch (InvalidMessageException e) {
+                Log.w(TAG, "receiveMsgChunk: InvalidMessage from " + nick
+                        + " — dropping, session preserved: " + e.getMessage());
+                throw e;
             }
-        } catch (DuplicateMessageException e) {
-            Log.w(TAG, "receiveMsgChunk: duplicate from " + nick);
-            return null;
-        } catch (InvalidMessageException e) {
-            Log.w(TAG, "receiveMsgChunk: InvalidMessage from " + nick
-                    + ", clearing session: " + e.getMessage());
-            store.deleteSession(addr);
-            store.flushSession(addr, nick);
-            stores.remove(lc(nick));
-            throw e;
-        }
 
-        store.flushSession(addr, nick);
+            store.flushSession(addr, nick);
+        }
         return new DecryptResult(new String(plain, StandardCharsets.UTF_8), rawWire);
     }
 
@@ -563,29 +654,31 @@ public final class SignalStore {
 
     private IrcSignalStore getOrCreate(String nick) {
         String key = lc(nick);
-        IrcSignalStore s = stores.get(key);
-        if (s == null) {
-            PreKeyRecord localOpk = null;
-            String storedOpk = crypto.getString(KEY_CPK_PFX + key, null);
-            if (storedOpk != null) {
-                try { localOpk = new PreKeyRecord(unb64(storedOpk)); }
-                catch (Exception e) {
-                    Log.w(TAG, "getOrCreate: corrupt stored OPK for " + nick + ", regenerating", e);
+        synchronized (lockFor(nick)) {
+            IrcSignalStore s = stores.get(key);
+            if (s == null) {
+                PreKeyRecord localOpk = null;
+                String storedOpk = crypto.getString(KEY_CPK_PFX + key, null);
+                if (storedOpk != null) {
+                    try { localOpk = new PreKeyRecord(unb64(storedOpk)); }
+                    catch (Exception e) {
+                        Log.w(TAG, "getOrCreate: corrupt stored OPK for " + nick + ", regenerating", e);
+                    }
                 }
-            }
-            if (localOpk == null) {
-                try { localOpk = getOrCreatePreKeyForNick(nick); }
-                catch (Exception e) {
-                    Log.w(TAG, "getOrCreate: could not obtain pre-key for " + nick, e);
+                if (localOpk == null) {
+                    try { localOpk = getOrCreatePreKeyForNick(nick); }
+                    catch (Exception e) {
+                        Log.w(TAG, "getOrCreate: could not obtain pre-key for " + nick, e);
+                    }
                 }
+                List<PreKeyRecord> pks = localOpk != null
+                        ? new ArrayList<>(Collections.singletonList(localOpk)) : new ArrayList<>();
+                s = new IrcSignalStore(identityKeyPair, registrationId,
+                        signedPreKey, kyberPreKey, pks, crypto, nick);
+                stores.put(key, s);
             }
-            List<PreKeyRecord> pks = localOpk != null
-                    ? new ArrayList<>(Collections.singletonList(localOpk)) : new ArrayList<>();
-            s = new IrcSignalStore(identityKeyPair, registrationId,
-                    signedPreKey, kyberPreKey, pks, crypto, nick);
-            stores.put(key, s);
+            return s;
         }
-        return s;
     }
 
     private static SignalProtocolAddress addr(String nick) {
@@ -642,7 +735,7 @@ public final class SignalStore {
             KyberPreKeyStore, SessionStore {
 
         private static final String TAG2       = "IrcSignalStore";
-        private static final String CS_SESSION = "signal_sess/";
+        private static final String CS_SESSION = KEY_SESSION_PFX;
         private static final String CS_IDKEY   = "signal_idkey/";
 
         private final IdentityKeyPair        idKP;

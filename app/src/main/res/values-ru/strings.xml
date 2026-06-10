@@ -86,6 +86,19 @@
 Отпечаток сессии (проверьте вне канала):
 %s</string>
     <string name="encrypted_message_failed">[Зашифрованное сообщение — не удалось расшифровать]</string>
+    <string name="e2e_key_changed_warning">⚠️ ПРЕДУПРЕЖДЕНИЕ О БЕЗОПАСНОСТИ: идентификатор шифрования для %1$s ИЗМЕНИЛСЯ. Это может произойти, если собеседник переустановил приложение, но также может означать, что кто-то выдаёт себя за него. НЕ доверяйте новому ключу, пока не сверите новый код безопасности с собеседником по отдельному надёжному каналу (лично, по телефону и т. п.).</string>
+    <string name="e2e_key_changed_fingerprints">\n\nПрежний: %1$s\nНовый: %2$s\n\nУдерживайте вкладку этого ЛС, чтобы открыть меню, затем примите или отклоните новый ключ.</string>
+    <string name="e2e_key_changed_toast">Ключ шифрования %1$s изменился — проверьте перед доверием</string>
+    <string name="accept_changed_key">Принять изменённый ключ (сначала проверьте!)</string>
+    <string name="reject_changed_key">Отклонить изменённый ключ</string>
+    <string name="pending_fingerprint_label">Новый (непроверенный) ключ:
+</string>
+    <string name="e2e_key_accepted">✅ Новый ключ шифрования для %1$s принят.</string>
+    <string name="e2e_key_accepted_toast">Новый ключ для %1$s принят</string>
+    <string name="e2e_key_rejected">Изменённый ключ шифрования для %1$s отклонён. Сообщения по-прежнему используют ранее проверенный ключ.</string>
+    <string name="e2e_key_rejected_toast">Новый ключ для %1$s отклонён</string>
+    <string name="e2e_pending_send_warning">Внимание: %1$s прислал новый (непроверенный) ключ. Шифрование продолжается ранее проверенным ключом — проверьте его в меню ЛС.</string>
+
     <string name="signal_menu_title">Signal E2E с %s</string>
     <string name="session_fingerprint_label">Отпечаток сессии:
 </string>
