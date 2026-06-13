@@ -53,6 +53,12 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
     private static final Pattern MARKDOWN_LINK =
             Pattern.compile("\\[([^\\]]+)\\]\\(<?(https?://[^)>]+)>?\\)");
 
+    private static final float NORMAL_TEXT_SIZE_SP = 15f;
+
+    private static final float EMOJI_TEXT_SIZE_SP = 32f;
+
+    private static final int EMOJI_ONLY_MAX_COUNT = 6;
+
     private static final ThreadLocal<SimpleDateFormat> TIME_FMT =
             ThreadLocal.withInitial(() -> new SimpleDateFormat("HH:mm", Locale.getDefault()));
 
@@ -102,6 +108,7 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             ThemeHelper.tintSentBubble(sh.bubble);
             sh.text.setVisibility(text.isEmpty() ? View.GONE : View.VISIBLE);
             renderLinks(sh.text, text);
+            applyEmojiTextSize(sh.text, text);
             bindReplyBanner(sh.replyBanner, sh.replyNick, sh.replyText, msg);
             bindImage(sh.messageImage, msg);
             bindLockBadge(sh.lockBadge, msg.isEncrypted());
@@ -116,6 +123,7 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             rh.nick.setText(msg.getNick());
             rh.text.setVisibility(text.isEmpty() ? View.GONE : View.VISIBLE);
             renderLinks(rh.text, text);
+            applyEmojiTextSize(rh.text, text);
             bindReplyBanner(rh.replyBanner, rh.replyNick, rh.replyText, msg);
             bindImage(rh.messageImage, msg);
             bindLockBadge(rh.lockBadge, msg.isEncrypted());
@@ -124,6 +132,11 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
             if (rh.messageImage != null)
                 rh.messageImage.setOnClickListener(v -> openFullscreenImage(v, msg.getImageUrl()));
         }
+    }
+
+    private static void applyEmojiTextSize(TextView tv, String text) {
+        float size = isEmojiOnly(text) ? EMOJI_TEXT_SIZE_SP : NORMAL_TEXT_SIZE_SP;
+        tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, size);
     }
 
     private void showMessageMenu(@NonNull View anchor,
@@ -230,6 +243,59 @@ public class ChatAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
         if (url == null) return false;
         String lc = url.toLowerCase(java.util.Locale.ROOT);
         return lc.startsWith("https://") || lc.startsWith("http://");
+    }
+
+    private static boolean isEmojiOnly(String text) {
+        if (text == null || text.isEmpty()) return false;
+
+        int emojiCount = 0;
+        int i = 0;
+        int len = text.length();
+        boolean sawNonWhitespace = false;
+
+        while (i < len) {
+            int cp = text.codePointAt(i);
+            int cpLen = Character.charCount(cp);
+
+            if (Character.isWhitespace(cp)) {
+                i += cpLen;
+                continue;
+            }
+            sawNonWhitespace = true;
+
+            if (isEmojiModifierOrJoiner(cp)) {
+                i += cpLen;
+                continue;
+            }
+
+            if (!isEmojiCodePoint(cp)) {
+                return false;
+            }
+
+            emojiCount++;
+            if (emojiCount > EMOJI_ONLY_MAX_COUNT) return false;
+            i += cpLen;
+        }
+
+        return sawNonWhitespace && emojiCount > 0;
+    }
+
+    private static boolean isEmojiModifierOrJoiner(int cp) {
+        return cp == 0x200D
+                || cp == 0xFE0F
+                || cp == 0xFE0E
+                || (cp >= 0x1F3FB && cp <= 0x1F3FF);
+    }
+
+    private static boolean isEmojiCodePoint(int cp) {
+        return (cp >= 0x1F300 && cp <= 0x1FAFF)
+                || (cp >= 0x1F1E6 && cp <= 0x1F1FF)
+                || (cp >= 0x2600 && cp <= 0x27BF)
+                || (cp >= 0x2300 && cp <= 0x23FF)
+                || (cp >= 0x2B00 && cp <= 0x2BFF)
+                || cp == 0x2764
+                || cp == 0x303D
+                || cp == 0x3030;
     }
 
     private static void renderLinks(TextView tv, String raw) {

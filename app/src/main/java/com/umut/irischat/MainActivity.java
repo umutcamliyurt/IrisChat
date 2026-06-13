@@ -69,6 +69,16 @@ public class MainActivity extends AppCompatActivity {
         return url;
     }
 
+    private static final java.util.regex.Pattern QUOTE_REPLY_PATTERN =
+            java.util.regex.Pattern.compile("^> <([^>]+)>\\s?(.*)$");
+
+    private static String[] parseQuoteReply(String text) {
+        if (text == null) return null;
+        java.util.regex.Matcher m = QUOTE_REPLY_PATTERN.matcher(text);
+        if (!m.matches()) return null;
+        return new String[]{m.group(1), m.group(2)};
+    }
+
     private static boolean isValidServerName(String name) {
         if (name == null || name.isEmpty() || name.length() > 100) return false;
         for (int i = 0; i < name.length(); i++) {
@@ -120,6 +130,9 @@ public class MainActivity extends AppCompatActivity {
     private final Map<String, List<String>> channelMembers =
             java.util.Collections.synchronizedMap(new LinkedHashMap<>());
 
+    private final Map<String, String[]> pendingIrcQuoteReplies =
+            java.util.Collections.synchronizedMap(new LinkedHashMap<>());
+
     private IrcService ircService;
     private boolean    serviceBound = false;
 
@@ -151,6 +164,22 @@ public class MainActivity extends AppCompatActivity {
                 @Override public void onMessage(String serverName, String channel,
                                                 String nick, String text, String imageUrl) {
                     String key = tabKey(serverName, channel);
+
+                    String pendingMapKey = key + "\u0000" + nick;
+                    String[] quote = parseQuoteReply(text);
+                    if (quote != null) {
+                        pendingIrcQuoteReplies.put(pendingMapKey, quote);
+                        return;
+                    }
+
+                    String replyNick = null;
+                    String replyText = null;
+                    String[] pending = pendingIrcQuoteReplies.remove(pendingMapKey);
+                    if (pending != null) {
+                        replyNick = pending[0];
+                        replyText = pending[1];
+                    }
+
                     if (isDmTab(key) && signalStore.hasIdentity()
                             && SignalStore.isSignalMessage(text)) {
                         new Thread(() -> {
@@ -172,7 +201,7 @@ public class MainActivity extends AppCompatActivity {
                         return;
                     }
                     appendToTab(key, new ChatMessage(nick, text,
-                            ChatMessage.Type.RECEIVED, null, null, imageUrl));
+                            ChatMessage.Type.RECEIVED, replyNick, replyText, imageUrl));
                     if (isDmTab(key)) runOnUiThread(() -> refreshTabLabel(key));
                 }
                 @Override public void onNotice(String serverName, String fromNick, String text) {
@@ -378,7 +407,6 @@ public class MainActivity extends AppCompatActivity {
         handleDmIntent(intent);
     }
 
-    /** Opens the DM tab referenced by a tapped DM notification, if any. */
     private void handleDmIntent(Intent intent) {
         if (intent == null) return;
         String server = intent.getStringExtra(IrcService.EXTRA_DM_SERVER);
