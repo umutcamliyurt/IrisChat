@@ -301,16 +301,23 @@ public class MainActivity extends AppCompatActivity {
             registerForActivityResult(
                     new ActivityResultContracts.StartActivityForResult(),
                     result -> {
-                        if (result.getResultCode() == RESULT_OK && result.getData() != null) {
-                            String json = result.getData()
-                                    .getStringExtra(ServerSwitcherActivity.EXTRA_SERVER_JSON);
-                            if (json != null) {
-                                try {
-                                    addServer(Server.fromJson(new JSONObject(json)));
-                                } catch (JSONException e) {
-                                    Toast.makeText(this, getString(R.string.failed_to_load_server),
-                                            Toast.LENGTH_SHORT).show();
-                                }
+                        if (result.getResultCode() != RESULT_OK || result.getData() == null) return;
+                        Intent data = result.getData();
+
+                        if (data.getBooleanExtra(ServerSwitcherActivity.EXTRA_IS_DELETE, false)) {
+                            String deleteName = data.getStringExtra(
+                                    ServerSwitcherActivity.EXTRA_DELETE_NAME);
+                            if (deleteName != null) removeServer(deleteName);
+                            return;
+                        }
+
+                        String json = data.getStringExtra(ServerSwitcherActivity.EXTRA_SERVER_JSON);
+                        if (json != null) {
+                            try {
+                                addOrReplaceServer(Server.fromJson(new JSONObject(json)));
+                            } catch (JSONException e) {
+                                Toast.makeText(this, getString(R.string.failed_to_load_server),
+                                        Toast.LENGTH_SHORT).show();
                             }
                         }
                     });
@@ -722,22 +729,49 @@ public class MainActivity extends AppCompatActivity {
         scheduleSave();
     }
 
-    private void addServer(Server server) {
+    private void addOrReplaceServer(Server server) {
         if (!isValidServerName(server.getName())) {
             Toast.makeText(this, getString(R.string.invalid_server_name), Toast.LENGTH_SHORT).show();
             return;
         }
 
         String name = server.getName();
+        boolean isEdit = knownServers.containsKey(name);
+
+        if (isEdit) {
+            if (serviceBound && ircService != null) ircService.disconnectServer(name);
+
+            Server old = knownServers.get(name);
+            if (old != null) {
+                List<String> keysToRemove = new ArrayList<>();
+                synchronized (stateLock) {
+                    for (String ch : old.getChannels()) {
+                        String key = tabKey(name, ch);
+                        if (!server.getChannels().contains(ch)) {
+                            keysToRemove.add(key);
+                        }
+                    }
+                    for (String key : keysToRemove) {
+                        tabKeys.remove(key);
+                        chatLogs.remove(key);
+                        chatRowIds.remove(key);
+                    }
+                }
+                if (!keysToRemove.isEmpty()) pagerAdapter.notifyDataSetChanged();
+            }
+        }
+
         knownServers.put(name, server);
 
         boolean tabsAdded = false;
         for (String ch : server.getChannels()) {
             String key = tabKey(name, ch);
-            if (!chatLogs.containsKey(key)) {
-                chatLogs.put(key, loadChannelHistory(name, ch));
-                tabKeys.add(key);
-                tabsAdded = true;
+            synchronized (stateLock) {
+                if (!chatLogs.containsKey(key)) {
+                    chatLogs.put(key, loadChannelHistory(name, ch));
+                    tabKeys.add(key);
+                    tabsAdded = true;
+                }
             }
         }
         if (tabsAdded) pagerAdapter.notifyDataSetChanged();
@@ -748,6 +782,44 @@ public class MainActivity extends AppCompatActivity {
 
         if (serviceBound) ircService.connect(server);
     }
+
+    private void removeServer(String name) {
+        if (!knownServers.containsKey(name)) return;
+
+        if (serviceBound && ircService != null) ircService.disconnectServer(name);
+
+        List<String> keysToRemove = new ArrayList<>();
+        synchronized (stateLock) {
+            for (String key : tabKeys) {
+                int slash = key.indexOf('/');
+                if (slash >= 0 && key.substring(0, slash).equals(name)) {
+                    keysToRemove.add(key);
+                }
+            }
+            for (String key : keysToRemove) {
+                tabKeys.remove(key);
+                chatLogs.remove(key);
+                chatRowIds.remove(key);
+                dmGreetingSent.remove(key);
+                channelMembers.remove(key);
+            }
+            knownServers.remove(name);
+        }
+
+        if (msgDb != null) {
+            for (String key : keysToRemove) {
+                final String k = key;
+                new Thread(() -> msgDb.deleteTab(k), "db-remove-server").start();
+            }
+        }
+
+        pagerAdapter.notifyDataSetChanged();
+        serverLabel.setText(buildServerLabelText());
+        refreshStatusBar();
+        scheduleSave();
+    }
+
+
 
     private String buildServerLabelText() {
         if (knownServers.isEmpty()) return getString(R.string.app_name);

@@ -52,6 +52,7 @@
     <string name="edit_server_title">Изменить сервер</string>
     <string name="edit">Изменить</string>
     <string name="delete">Удалить</string>
+    <string name="confirm_delete_server">Удалить \"%s\"? Соединение будет разорвано, все вкладки удалены.</string>
     <string name="error_selecting_server">Ошибка при выборе сервера</string>
     <string name="invalid_server_name">Недопустимое имя сервера</string>
     <string name="all_fields_required">Все поля, кроме пароля, обязательны</string>
@@ -98,7 +99,6 @@
     <string name="e2e_key_rejected">Изменённый ключ шифрования для %1$s отклонён. Сообщения по-прежнему используют ранее проверенный ключ.</string>
     <string name="e2e_key_rejected_toast">Новый ключ для %1$s отклонён</string>
     <string name="e2e_pending_send_warning">Внимание: %1$s прислал новый (непроверенный) ключ. Шифрование продолжается ранее проверенным ключом — проверьте его в меню ЛС.</string>
-
     <string name="signal_menu_title">Signal E2E с %s</string>
     <string name="session_fingerprint_label">Отпечаток сессии:
 </string>

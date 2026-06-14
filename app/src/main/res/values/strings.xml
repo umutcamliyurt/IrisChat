@@ -52,6 +52,7 @@
     <string name="edit_server_title">Edit Server</string>
     <string name="edit">Edit</string>
     <string name="delete">Delete</string>
+    <string name="confirm_delete_server">Delete \"%s\"? This will disconnect and remove all its tabs.</string>
     <string name="error_selecting_server">Error selecting server</string>
     <string name="invalid_server_name">Invalid server name</string>
     <string name="all_fields_required">All fields except password are required</string>

@@ -37,10 +37,12 @@ import java.util.List;
 
 public class ServerSwitcherActivity extends AppCompatActivity {
 
-    public static final String EXTRA_SERVER_JSON = "extra_server_json";
+    public static final String EXTRA_SERVER_JSON    = "extra_server_json";
+    public static final String EXTRA_DELETE_NAME    = "extra_delete_name";
+    public static final String EXTRA_IS_DELETE      = "extra_is_delete";
 
-    private static final String CRYPTO_KEY_LIST = "server_list";
-    private static final String KEY_LANGUAGE    = "app_language";
+    static final String CRYPTO_KEY_SERVERS = "saved_servers";
+    private static final String KEY_LANGUAGE = "app_language";
 
     private ListView          serverListView;
     private Button            addServerButton;
@@ -110,11 +112,22 @@ public class ServerSwitcherActivity extends AppCompatActivity {
         }
     }
 
+    private void returnDelete(String serverName) {
+        Intent result = new Intent();
+        result.putExtra(EXTRA_DELETE_NAME, serverName);
+        result.putExtra(EXTRA_IS_DELETE, true);
+        setResult(RESULT_OK, result);
+        finish();
+    }
+
     private void showAddEditSheet(Server existing, int editIndex) {
         ServerEditSheet sheet = ServerEditSheet.newInstance(existing, editIndex);
         sheet.setListener((server, idx) -> {
-            if (idx >= 0) servers.set(idx, server);
-            else          servers.add(server);
+            if (idx >= 0) {
+                servers.set(idx, server);
+            } else {
+                servers.add(server);
+            }
             saveServers();
             adapter.notifyDataSetChanged();
         });
@@ -128,11 +141,21 @@ public class ServerSwitcherActivity extends AppCompatActivity {
                         getString(R.string.edit),
                         getString(R.string.delete)
                 }, (dialog, which) -> {
-                    if (which == 0) showAddEditSheet(servers.get(index), index);
-                    else {
-                        servers.remove(index);
-                        saveServers();
-                        adapter.notifyDataSetChanged();
+                    if (which == 0) {
+                        showAddEditSheet(servers.get(index), index);
+                    } else {
+                        String name = servers.get(index).getName();
+                        new AlertDialog.Builder(this, R.style.IrisDialog)
+                                .setTitle(R.string.delete)
+                                .setMessage(getString(R.string.confirm_delete_server, name))
+                                .setPositiveButton(R.string.delete, (d2, w2) -> {
+                                    servers.remove(index);
+                                    saveServers();
+                                    adapter.notifyDataSetChanged();
+                                    returnDelete(name);
+                                })
+                                .setNegativeButton(R.string.cancel, null)
+                                .show();
                     }
                 })
                 .show();
@@ -260,13 +283,18 @@ public class ServerSwitcherActivity extends AppCompatActivity {
 
     private List<Server> loadServers() {
         List<Server> list = new ArrayList<>();
-        String raw = crypto.getString(CRYPTO_KEY_LIST, null);
+        String raw = crypto.getString(CRYPTO_KEY_SERVERS, null);
         if (raw == null) return list;
         try {
             JSONArray arr = new JSONArray(raw);
-            for (int i = 0; i < arr.length(); i++)
-                list.add(Server.fromJson(arr.getJSONObject(i)));
-        } catch (JSONException e) { e.printStackTrace(); }
+            for (int i = 0; i < arr.length(); i++) {
+                try {
+                    list.add(Server.fromJson(arr.getJSONObject(i)));
+                } catch (JSONException ignored) {}
+            }
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
         return list;
     }
 
@@ -275,7 +303,7 @@ public class ServerSwitcherActivity extends AppCompatActivity {
         for (Server s : servers) {
             try { arr.put(s.toJson()); } catch (JSONException ignored) {}
         }
-        crypto.putString(CRYPTO_KEY_LIST, arr.toString());
+        crypto.putString(CRYPTO_KEY_SERVERS, arr.toString());
     }
 
     private static class ServerListAdapter extends ArrayAdapter<Server> {

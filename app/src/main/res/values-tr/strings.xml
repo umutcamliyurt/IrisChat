@@ -52,6 +52,7 @@
     <string name="edit_server_title">Sunucuyu Düzenle</string>
     <string name="edit">Düzenle</string>
     <string name="delete">Sil</string>
+    <string name="confirm_delete_server">\"%s\" silinsin mi? Bağlantı kesilecek ve tüm sekmeler kaldırılacak.</string>
     <string name="error_selecting_server">Sunucu seçilirken hata oluştu</string>
     <string name="invalid_server_name">Geçersiz sunucu adı</string>
     <string name="all_fields_required">Şifre dışındaki tüm alanlar zorunludur</string>
