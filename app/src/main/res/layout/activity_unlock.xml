@@ -1,101 +1,109 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:gravity="center"
-    android:padding="32dp"
+    android:fillViewport="true"
     android:background="@color/bg_primary">
 
-    <ImageView
-        android:layout_width="64dp"
-        android:layout_height="64dp"
-        android:id="@+id/unlockLockIcon"
-        android:src="@android:drawable/ic_lock_lock"
-        android:tint="@color/accent"
-        android:contentDescription="@string/lock"
-        android:layout_marginBottom="20dp" />
-
-    <TextView
-        android:id="@+id/unlockTitle"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/app_name"
-        android:textColor="@color/text_primary"
-        android:textSize="28sp"
-        android:fontFamily="sans-serif-medium"
-        android:layout_marginBottom="6dp" />
-
-    <TextView
-        android:id="@+id/unlockSubtitle"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/enter_password_to_unlock"
-        android:textColor="@color/text_secondary"
-        android:textSize="14sp"
-        android:gravity="center"
-        android:layout_marginBottom="36dp" />
-
-    <FrameLayout
+    <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="48dp"
-        android:layout_marginBottom="12dp">
-
-        <EditText
-            android:id="@+id/unlockPasswordInput"
-            android:layout_width="match_parent"
-            android:layout_height="48dp"
-            android:hint="@string/password"
-            android:textColorHint="@color/text_hint"
-            android:textColor="@color/text_primary"
-            android:background="@drawable/bg_input_field"
-            android:inputType="textPassword"
-            android:imeOptions="actionDone"
-            android:maxLines="1"
-            android:paddingStart="14dp"
-            android:paddingEnd="48dp" />
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:padding="32dp">
 
         <ImageView
-            android:id="@+id/toggleUnlockVisibility"
-            android:layout_width="42dp"
-            android:layout_height="42dp"
-            android:layout_gravity="end|center_vertical"
-            android:src="@android:drawable/ic_menu_view"
-            android:tint="@color/text_secondary"
-            android:contentDescription="@string/toggle_visibility"
-            android:padding="10dp"
-            android:background="?attr/selectableItemBackgroundBorderless" />
-    </FrameLayout>
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:id="@+id/unlockLockIcon"
+            android:src="@android:drawable/ic_lock_lock"
+            android:tint="@color/accent"
+            android:contentDescription="@string/lock"
+            android:layout_marginBottom="20dp" />
 
-    <LinearLayout
-        android:id="@+id/unlockConfirmLayout"
-        android:layout_width="match_parent"
-        android:layout_height="48dp"
-        android:orientation="horizontal"
-        android:visibility="gone"
-        android:layout_marginBottom="24dp">
+        <TextView
+            android:id="@+id/unlockTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textColor="@color/text_primary"
+            android:textSize="28sp"
+            android:fontFamily="sans-serif-medium"
+            android:layout_marginBottom="6dp" />
 
-        <EditText
-            android:id="@+id/unlockConfirmInput"
+        <TextView
+            android:id="@+id/unlockSubtitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/enter_password_to_unlock"
+            android:textColor="@color/text_secondary"
+            android:textSize="14sp"
+            android:gravity="center"
+            android:layout_marginBottom="36dp" />
+
+        <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="48dp"
-            android:hint="@string/confirm_password"
-            android:textColorHint="@color/text_hint"
-            android:textColor="@color/text_primary"
-            android:background="@drawable/bg_input_field"
-            android:inputType="textPassword"
-            android:imeOptions="actionDone"
-            android:maxLines="1"
-            android:paddingStart="14dp"
-            android:paddingEnd="14dp" />
+            android:layout_marginBottom="12dp">
+
+            <EditText
+                android:id="@+id/unlockPasswordInput"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="@string/password"
+                android:textColorHint="@color/text_hint"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/bg_input_field"
+                android:inputType="textPassword"
+                android:imeOptions="actionDone"
+                android:maxLines="1"
+                android:paddingStart="14dp"
+                android:paddingEnd="48dp" />
+
+            <ImageView
+                android:id="@+id/toggleUnlockVisibility"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:layout_gravity="end|center_vertical"
+                android:src="@android:drawable/ic_menu_view"
+                android:tint="@color/text_secondary"
+                android:contentDescription="@string/toggle_visibility"
+                android:padding="10dp"
+                android:background="?attr/selectableItemBackgroundBorderless" />
+        </FrameLayout>
+
+        <LinearLayout
+            android:id="@+id/unlockConfirmLayout"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:orientation="horizontal"
+            android:visibility="gone"
+            android:layout_marginBottom="24dp">
+
+            <EditText
+                android:id="@+id/unlockConfirmInput"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:hint="@string/confirm_password"
+                android:textColorHint="@color/text_hint"
+                android:textColor="@color/text_primary"
+                android:background="@drawable/bg_input_field"
+                android:inputType="textPassword"
+                android:imeOptions="actionDone"
+                android:maxLines="1"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/unlockButton"
+            style="@style/IrisButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/unlock"
+            android:layout_marginTop="8dp" />
+
     </LinearLayout>
 
-    <Button
-        android:id="@+id/unlockButton"
-        style="@style/IrisButton"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/unlock"
-        android:layout_marginTop="8dp" />
-
-</LinearLayout>
+</ScrollView>

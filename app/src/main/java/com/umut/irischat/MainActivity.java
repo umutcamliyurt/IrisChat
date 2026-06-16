@@ -18,6 +18,10 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.fragment.app.Fragment;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -324,6 +328,9 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        getWindow().setStatusBarColor(android.graphics.Color.TRANSPARENT);
+        getWindow().setNavigationBarColor(android.graphics.Color.TRANSPARENT);
         super.onCreate(savedInstanceState);
 
         crypto = UnlockActivity.cryptoStore;
@@ -355,6 +362,33 @@ public class MainActivity extends AppCompatActivity {
         replyPreviewText = findViewById(R.id.replyPreviewText);
         replyCancelBtn   = findViewById(R.id.replyCancelBtn);
         replyCancelBtn.setOnClickListener(v -> clearReply());
+
+        View statusBarSpacer     = findViewById(R.id.statusBarSpacer);
+        View navigationBarSpacer = findViewById(R.id.navigationBarSpacer);
+
+        View rootContent = getWindow().getDecorView().findViewById(android.R.id.content);
+        ViewCompat.setOnApplyWindowInsetsListener(rootContent, (v, insets) -> {
+            androidx.core.graphics.Insets sysBars =
+                    insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            androidx.core.graphics.Insets ime =
+                    insets.getInsets(WindowInsetsCompat.Type.ime());
+
+            v.setPadding(sysBars.left, 0, sysBars.right, 0);
+
+            if (statusBarSpacer != null) {
+                android.view.ViewGroup.LayoutParams lp = statusBarSpacer.getLayoutParams();
+                lp.height = sysBars.top;
+                statusBarSpacer.setLayoutParams(lp);
+            }
+
+            if (navigationBarSpacer != null) {
+                android.view.ViewGroup.LayoutParams lp = navigationBarSpacer.getLayoutParams();
+                lp.height = Math.max(sysBars.bottom, ime.bottom);
+                navigationBarSpacer.setLayoutParams(lp);
+            }
+
+            return WindowInsetsCompat.CONSUMED;
+        });
 
         addServerButton.setOnClickListener(v ->
                 serverPickerLauncher.launch(new Intent(this, ServerSwitcherActivity.class)));
@@ -536,11 +570,14 @@ public class MainActivity extends AppCompatActivity {
                 View sheet = ((BottomSheetDialog) d)
                         .findViewById(com.google.android.material.R.id.design_bottom_sheet);
                 if (sheet != null) {
-                    int height = (int) (getResources().getDisplayMetrics().heightPixels * 0.60);
-                    sheet.getLayoutParams().height = height;
-                    BottomSheetBehavior<View> behavior = BottomSheetBehavior.from(sheet);
-                    behavior.setPeekHeight(height);
-                    behavior.setState(BottomSheetBehavior.STATE_EXPANDED);
+                    sheet.post(() -> {
+                        int height = (int) (sheet.getRootView().getHeight() * 0.60);
+                        sheet.getLayoutParams().height = height;
+                        sheet.requestLayout();
+                        BottomSheetBehavior<View> behavior = BottomSheetBehavior.from(sheet);
+                        behavior.setPeekHeight(height);
+                        behavior.setState(BottomSheetBehavior.STATE_EXPANDED);
+                    });
                 }
             });
             return dialog;

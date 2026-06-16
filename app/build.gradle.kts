@@ -9,28 +9,19 @@ android {
     }
 
     namespace = "com.umut.irischat"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.umut.irischat"
         minSdk = 24
-        targetSdk = 34
-        versionCode = 132
-        versionName = "1.3.2"
+        targetSdk = 35
+        versionCode = 140
+        versionName = "1.4"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
-        }
-    }
-
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            include("arm64-v8a", "armeabi-v7a")
-            isUniversalApk = true
+            abiFilters += listOf("arm64-v8a")
         }
     }
 

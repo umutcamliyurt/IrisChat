@@ -43,7 +43,7 @@ public class ThemeHelper {
     }
 
     static void saveAccent(Context ctx, CryptoStore crypto, int color) {
-        String hex = String.format("#%06X", 0xFFFFFF & color);
+        String hex = String.format(java.util.Locale.ROOT, "#%06X", 0xFFFFFF & color);
         crypto.putString(KEY_ACCENT_COLOR, hex);
         ctx.getApplicationContext()
                 .getSharedPreferences(PLAIN_PREFS, Context.MODE_PRIVATE)
@@ -79,7 +79,7 @@ public class ThemeHelper {
         activity.getApplicationContext()
                 .getSharedPreferences(PLAIN_PREFS, Context.MODE_PRIVATE)
                 .edit()
-                .putString(KEY_ACCENT_COLOR, String.format("#%06X", 0xFFFFFF & currentAccent))
+                .putString(KEY_ACCENT_COLOR, String.format(java.util.Locale.ROOT, "#%06X", 0xFFFFFF & currentAccent))
                 .apply();
 
         ColorStateList csl = ColorStateList.valueOf(currentAccent);

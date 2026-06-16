@@ -18,6 +18,10 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 
 public class UnlockActivity extends AppCompatActivity {
 
@@ -42,6 +46,9 @@ public class UnlockActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        getWindow().setStatusBarColor(android.graphics.Color.TRANSPARENT);
+        getWindow().setNavigationBarColor(android.graphics.Color.TRANSPARENT);
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_unlock);
 
@@ -56,6 +63,17 @@ public class UnlockActivity extends AppCompatActivity {
         confirmLayout    = findViewById(R.id.unlockConfirmLayout);
         unlockButton     = findViewById(R.id.unlockButton);
         toggleVisibility = findViewById(R.id.toggleUnlockVisibility);
+
+        View rootView = getWindow().getDecorView().findViewById(android.R.id.content);
+        ViewCompat.setOnApplyWindowInsetsListener(rootView, (v, insets) -> {
+            androidx.core.graphics.Insets sysBars =
+                    insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            androidx.core.graphics.Insets ime =
+                    insets.getInsets(WindowInsetsCompat.Type.ime());
+            int bottomPadding = Math.max(sysBars.bottom, ime.bottom);
+            v.setPadding(sysBars.left, sysBars.top, sysBars.right, bottomPadding);
+            return WindowInsetsCompat.CONSUMED;
+        });
 
         ThemeHelper.applyToUnlock(this);
 
