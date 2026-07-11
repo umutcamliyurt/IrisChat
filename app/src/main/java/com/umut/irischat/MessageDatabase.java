@@ -137,12 +137,12 @@ public final class MessageDatabase {
                 keySnapshot);
     }
 
-    public long countForTab(String tabKey) {
+    public long getMaxTimestampForTab(String tabKey) {
         Cursor c = helper.getReadableDatabase().rawQuery(
-                "SELECT COUNT(*) FROM " + TABLE + " WHERE " + COL_TAB_KEY + "=?",
+                "SELECT MAX(" + COL_TIMESTAMP + ") FROM " + TABLE + " WHERE " + COL_TAB_KEY + "=?",
                 new String[]{tabKey});
         try {
-            return c.moveToFirst() ? c.getLong(0) : 0;
+            return (c.moveToFirst() && !c.isNull(0)) ? c.getLong(0) : -1L;
         } finally {
             c.close();
         }

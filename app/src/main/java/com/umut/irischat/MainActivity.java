@@ -21,7 +21,6 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
-import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.fragment.app.Fragment;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -150,14 +149,19 @@ public class MainActivity extends AppCompatActivity {
                 @Override public void onConnected(String serverName) {
                     runOnUiThread(() -> {
                         refreshStatusBar();
-                        if (signalStore != null && signalStore.hasIdentity()) {
-                            for (String key : new ArrayList<>(tabKeys)) {
-                                if (!isDmTab(key)) continue;
-                                int sl = key.indexOf('/');
-                                if (sl < 0) continue;
-                                String srv  = key.substring(0, sl);
-                                String nick = key.substring(sl + 1);
-                                if (srv.equals(serverName)) announceKeyTo(serverName, nick);
+                        for (String key : new ArrayList<>(tabKeys)) {
+                            if (!isDmTab(key)) continue;
+                            int sl = key.indexOf('/');
+                            if (sl < 0) continue;
+                            String srv  = key.substring(0, sl);
+                            String nick = key.substring(sl + 1);
+                            if (!srv.equals(serverName)) continue;
+
+                            assert key.equals(IrcService.dbTabKey(srv, nick));
+
+                            ircService.requestHistory(serverName, nick);
+                            if (signalStore != null && signalStore.hasIdentity()) {
+                                announceKeyTo(serverName, nick);
                             }
                         }
                     });
@@ -1531,7 +1535,6 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
-        void clearFragments() { liveFragments.clear(); }
     }
 
     public static class ChannelFragment extends Fragment {

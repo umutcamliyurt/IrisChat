@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -74,6 +75,13 @@ public class IrcService extends Service {
     private static final int  MAX_INBOUND_MSG_BYTES    = 8192;
     private static final int  MAX_OUTBOUND_MSG_BYTES   = 400;
 
+    private static final int  HISTORY_BACKFILL_COUNT      = 50;
+    private static final int  HISTORY_BACKFILL_MAX         = 200;
+    private static final long HISTORY_BACKFILL_WINDOW_MS  = 8_000L;
+    private static final long MIN_HISTORY_REQUEST_INTERVAL_MS = 3_000L;
+    private static final long HISTORY_REQUEST_STAGGER_MS = 300L;
+    private static final long HISTORY_REQUEST_STAGGER_CAP_MS = 6_000L;
+
     public class LocalBinder extends Binder {
         IrcService getService() { return IrcService.this; }
     }
@@ -105,6 +113,135 @@ public class IrcService extends Service {
     private final Map<String, Long> dmLastAlertMs =
             new java.util.concurrent.ConcurrentHashMap<>();
     private final AtomicInteger nextDmNotifId = new AtomicInteger(DM_NOTIF_ID_BASE);
+
+    private final Map<String, Long> lastSeenMs =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static final String HISTORY_PREFS_NAME = "irc_chat_history_watermarks";
+    private static final long WATERMARK_PERSIST_MIN_INTERVAL_MS = 3_000L;
+
+    private SharedPreferences historyPrefs;
+    private final Map<String, Long> lastPersistedMs =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static String encodeWatermarkPrefKey(String rawKey) {
+        return Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(rawKey.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String decodeWatermarkPrefKey(String encoded) {
+        return new String(Base64.getUrlDecoder().decode(encoded), StandardCharsets.UTF_8);
+    }
+
+    private void loadPersistedWatermarks() {
+        if (historyPrefs == null) return;
+        for (Map.Entry<String, ?> e : historyPrefs.getAll().entrySet()) {
+            Object v = e.getValue();
+            if (!(v instanceof Long)) continue;
+            try {
+                lastSeenMs.put(decodeWatermarkPrefKey(e.getKey()), (Long) v);
+            } catch (Exception ex) {
+                Log.w(TAG, "Dropping unreadable persisted watermark: " + e.getKey());
+            }
+        }
+    }
+
+    private void persistWatermark(String rawKey, long timestampMs) {
+        persistWatermark(rawKey, timestampMs, false);
+    }
+
+    private void persistWatermark(String rawKey, long timestampMs, boolean force) {
+        if (historyPrefs == null) return;
+        Long lastPersisted = lastPersistedMs.get(rawKey);
+        if (!force && lastPersisted != null
+                && (timestampMs - lastPersisted) < WATERMARK_PERSIST_MIN_INTERVAL_MS) {
+            return;
+        }
+        lastPersistedMs.put(rawKey, timestampMs);
+        historyPrefs.edit().putLong(encodeWatermarkPrefKey(rawKey), timestampMs).apply();
+    }
+
+    private void flushAllWatermarks() {
+        if (historyPrefs == null) return;
+        SharedPreferences.Editor editor = historyPrefs.edit();
+        for (Map.Entry<String, Long> e : lastSeenMs.entrySet()) {
+            editor.putLong(encodeWatermarkPrefKey(e.getKey()), e.getValue());
+            lastPersistedMs.put(e.getKey(), e.getValue());
+        }
+        editor.commit();
+    }
+
+    private void purgePersistedWatermarksFor(String serverName) {
+        if (historyPrefs == null) return;
+        String prefix = serverName + "\u0000";
+        SharedPreferences.Editor editor = historyPrefs.edit();
+        boolean changed = false;
+        for (String encodedKey : historyPrefs.getAll().keySet()) {
+            try {
+                if (decodeWatermarkPrefKey(encodedKey).startsWith(prefix)) {
+                    editor.remove(encodedKey);
+                    changed = true;
+                }
+            } catch (Exception ignored) {}
+        }
+        if (changed) editor.apply();
+    }
+
+    public static String dbTabKey(String serverName, String target) {
+        return serverName + "/" + target;
+    }
+
+    private static String watermarkKey(String serverName, String target) {
+        return serverName + "\u0000" + target.toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private void recordLastSeen(String serverName, String target) {
+        String key = watermarkKey(serverName, target);
+        long now = System.currentTimeMillis();
+        lastSeenMs.put(key, now);
+        persistWatermark(key, now);
+    }
+
+    private static boolean isHistServ(String nick) {
+        return nick != null && nick.equalsIgnoreCase("HistServ");
+    }
+
+    private static final long DEDUPE_WINDOW_MS = 5 * 60_000L;
+    private final Map<String, Long> recentMessageFingerprints =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final AtomicInteger dedupeInsertCount = new AtomicInteger(0);
+
+    private boolean isDuplicateMessage(String serverName, String target, String nick, String text) {
+        String raw = watermarkKey(serverName, target) + "\u0000" + nick + "\u0000" + (text != null ? text : "");
+        String key = fingerprintHash(raw);
+        long now = System.currentTimeMillis();
+        Long prevExpiry = recentMessageFingerprints.put(key, now + DEDUPE_WINDOW_MS);
+        boolean duplicate = prevExpiry != null && now < prevExpiry;
+
+        if (dedupeInsertCount.incrementAndGet() % 200 == 0) {
+            long cutoff = now;
+            recentMessageFingerprints.entrySet().removeIf(e -> e.getValue() < cutoff);
+        }
+        return duplicate;
+    }
+
+    private static String fingerprintHash(String raw) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(raw.getBytes(StandardCharsets.UTF_8));
+            return Base64.getEncoder().encodeToString(digest);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            return raw;
+        }
+    }
+
+    private static final java.time.format.DateTimeFormatter IRC_HISTORY_TS_FMT =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+                    .withZone(java.time.ZoneOffset.UTC);
+
+    private static String formatHistoryTimestamp(long epochMs) {
+        return IRC_HISTORY_TS_FMT.format(java.time.Instant.ofEpochMilli(epochMs));
+    }
 
     public void setAppVisible(boolean visible) {
         appVisible = visible;
@@ -189,6 +326,8 @@ public class IrcService extends Service {
         final AtomicInteger retryCount = new AtomicInteger(0);
         volatile Future<?> botFuture;
         volatile Future<?> retryFuture;
+        volatile long historyBackfillUntilMs = 0L;
+        final AtomicInteger historyRequestSeq = new AtomicInteger(0);
 
         ServerState(Server s) { this.server = s; }
     }
@@ -199,6 +338,14 @@ public class IrcService extends Service {
     private ExecutorService botExecutor;
     private ExecutorService workerExecutor;
     private PowerManager.WakeLock wakeLock;
+
+    private void safeExecute(ExecutorService executor, String opName, Runnable task) {
+        try {
+            executor.execute(task);
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            Log.w(TAG, opName + " rejected — executor queue full or shut down");
+        }
+    }
 
     private void acquireWakeLock() {
         if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire(60_000L);
@@ -249,6 +396,9 @@ public class IrcService extends Service {
         super.onCreate();
         createNotificationChannel();
 
+        historyPrefs = getSharedPreferences(HISTORY_PREFS_NAME, MODE_PRIVATE);
+        loadPersistedWatermarks();
+
         botExecutor = new java.util.concurrent.ThreadPoolExecutor(
                 0, 16, 60L, java.util.concurrent.TimeUnit.SECONDS,
                 new java.util.concurrent.SynchronousQueue<>(),
@@ -286,9 +436,24 @@ public class IrcService extends Service {
     public void onDestroy() {
         super.onDestroy();
         unregisterNetworkCallback();
+        flushAllWatermarks();
         disconnectAll();
-        botExecutor.shutdownNow();
-        workerExecutor.shutdownNow();
+
+        botExecutor.shutdown();
+        workerExecutor.shutdown();
+        try {
+            if (!workerExecutor.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS)) {
+                workerExecutor.shutdownNow();
+            }
+            if (!botExecutor.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS)) {
+                botExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            botExecutor.shutdownNow();
+            workerExecutor.shutdownNow();
+        }
+
         releaseWakeLock();
     }
 
@@ -357,7 +522,18 @@ public class IrcService extends Service {
     public void disconnectServer(String serverName) {
         stopServerState(serverName);
         states.remove(serverName);
+        purgeHistoryStateFor(serverName);
         refreshNotification();
+    }
+
+    private void purgeHistoryStateFor(String serverName) {
+        String prefix = serverName + "\u0000";
+        lastSeenMs.keySet().removeIf(k -> k.startsWith(prefix));
+        lastHistoryRequestMs.keySet().removeIf(k -> k.startsWith(prefix));
+        pendingHistoryRequest.keySet().removeIf(k -> k.startsWith(prefix));
+        recentMessageFingerprints.keySet().removeIf(k -> k.startsWith(prefix));
+        lastPersistedMs.keySet().removeIf(k -> k.startsWith(prefix));
+        purgePersistedWatermarksFor(serverName);
     }
 
     public void disconnectAll() {
@@ -365,6 +541,9 @@ public class IrcService extends Service {
             for (String name : new ArrayList<>(states.keySet())) stopServerState(name);
             states.clear();
         }
+        lastHistoryRequestMs.clear();
+        pendingHistoryRequest.clear();
+        recentMessageFingerprints.clear();
         refreshNotification();
     }
 
@@ -373,7 +552,7 @@ public class IrcService extends Service {
         if (st == null || !st.connected.get() || st.bot == null) return false;
         final String sanitized = stripIrcInjection(message);
         final String safe = truncateToByteLimit(sanitized, MAX_OUTBOUND_MSG_BYTES);
-        workerExecutor.execute(() -> {
+        safeExecute(workerExecutor, "sendMessage", () -> {
             try { st.bot.send().message(channel, safe); }
             catch (Exception e) { Log.e(TAG, "sendMessage error [" + serverName + "]", e); }
         });
@@ -385,11 +564,97 @@ public class IrcService extends Service {
         if (st == null || !st.connected.get() || st.bot == null) return false;
         final String sanitized = stripIrcInjection(text);
         final String safe = truncateToByteLimit(sanitized, MAX_OUTBOUND_MSG_BYTES);
-        workerExecutor.execute(() -> {
+        safeExecute(workerExecutor, "sendNotice", () -> {
             try { st.bot.send().notice(targetNick, safe); }
             catch (Exception e) { Log.e(TAG, "sendNotice error [" + serverName + "]", e); }
         });
         return true;
+    }
+
+    private final Map<String, Long> lastHistoryRequestMs =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, Boolean> pendingHistoryRequest =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    public boolean requestHistory(String serverName, String target) {
+        ServerState st = states.get(serverName);
+        if (st == null || !st.connected.get() || st.bot == null) return false;
+        if (target == null || target.isEmpty()) return false;
+
+        final String safeTarget = stripIrcInjection(target).trim();
+        if (safeTarget.isEmpty() || safeTarget.indexOf(' ') >= 0) return false;
+
+        final String rateKey = watermarkKey(serverName, safeTarget);
+
+        long delay = Math.min(
+                st.historyRequestSeq.getAndIncrement() * HISTORY_REQUEST_STAGGER_MS,
+                HISTORY_REQUEST_STAGGER_CAP_MS);
+
+        mainHandler.postDelayed(
+                () -> fireHistoryRequest(st, serverName, safeTarget, rateKey), delay);
+        return true;
+    }
+
+    private void fireHistoryRequest(ServerState st, String serverName,
+                                    String safeTarget, String rateKey) {
+        if (!st.shouldRun.get()) return;
+
+        PircBotX bot = st.bot;
+        if (bot == null || !st.connected.get()) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        Long lastReq = lastHistoryRequestMs.get(rateKey);
+        if (lastReq != null && (now - lastReq) < MIN_HISTORY_REQUEST_INTERVAL_MS) {
+            long remaining = MIN_HISTORY_REQUEST_INTERVAL_MS - (now - lastReq);
+            if (pendingHistoryRequest.putIfAbsent(rateKey, Boolean.TRUE) == null) {
+                mainHandler.postDelayed(() -> {
+                    pendingHistoryRequest.remove(rateKey);
+                    fireHistoryRequest(st, serverName, safeTarget, rateKey);
+                }, remaining + 50);
+            }
+            return;
+        }
+        lastHistoryRequestMs.put(rateKey, now);
+        pendingHistoryRequest.remove(rateKey);
+
+        st.historyBackfillUntilMs = now + HISTORY_BACKFILL_WINDOW_MS;
+
+        Long since = lastSeenMs.get(rateKey);
+        if (since == null) {
+            try {
+                long dbMax = MessageDatabase.get(this)
+                        .getMaxTimestampForTab(dbTabKey(serverName, safeTarget));
+                if (dbMax > 0) {
+                    since = dbMax;
+                    lastSeenMs.put(rateKey, since);
+                    persistWatermark(rateKey, since, true);
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "requestHistory: failed to seed watermark from DB for "
+                        + rateKey, e);
+            }
+        }
+
+        final String query;
+        if (since != null) {
+            String ts = formatHistoryTimestamp(since);
+            query = "CHATHISTORY AFTER " + safeTarget + " timestamp=" + ts
+                    + " " + HISTORY_BACKFILL_MAX;
+        } else {
+            query = "CHATHISTORY LATEST " + safeTarget + " * " + HISTORY_BACKFILL_COUNT;
+        }
+
+        safeExecute(workerExecutor, "requestHistory[" + serverName + "]", () -> {
+            PircBotX bot2 = st.bot;
+            if (bot2 == null || !st.connected.get()) return;
+            try {
+                bot2.sendRaw().rawLine(query);
+            } catch (Exception e) {
+                Log.w(TAG, "requestHistory error [" + serverName + "]", e);
+            }
+        });
     }
 
     private static String stripIrcInjection(String s) {
@@ -413,7 +678,7 @@ public class IrcService extends Service {
         if (st.retryFuture != null) st.retryFuture.cancel(true);
         PircBotX bot = st.bot;
         if (bot != null) {
-            workerExecutor.execute(() -> {
+            safeExecute(workerExecutor, "close[" + name + "]", () -> {
                 try { bot.close(); } catch (Exception ignored) {}
             });
             st.bot = null;
@@ -457,6 +722,7 @@ public class IrcService extends Service {
                         public void onConnect(ConnectEvent event) {
                             st.connected.set(true);
                             st.retryCount.set(0);
+                            st.historyRequestSeq.set(0);
                             releaseWakeLock();
                             refreshNotification();
                             Listener l = listener;
@@ -489,11 +755,19 @@ public class IrcService extends Service {
                             String nick = event.getUser().getNick();
                             String text = event.getMessage();
 
+                            if (isHistServ(nick)) return;
+
                             if (text != null && text.getBytes(StandardCharsets.UTF_8).length
                                     > MAX_INBOUND_MSG_BYTES) {
                                 Log.w(TAG, "onMessage: oversized message from " + nick + " dropped");
                                 return;
                             }
+
+                            recordLastSeen(name, channel);
+
+                            if (nick.equalsIgnoreCase(myNick)) return;
+
+                            if (isDuplicateMessage(name, channel, nick, text)) return;
 
                             String imgUrl = MainActivity.extractImageUrl(text);
                             String display = imgUrl != null
@@ -506,11 +780,19 @@ public class IrcService extends Service {
                             String nick = event.getUser().getNick();
                             String text = event.getMessage();
 
+                            if (isHistServ(nick)) return;
+
                             if (text != null && text.getBytes(StandardCharsets.UTF_8).length
                                     > MAX_INBOUND_MSG_BYTES) {
                                 Log.w(TAG, "onPrivateMessage: oversized message from " + nick + " dropped");
                                 return;
                             }
+
+                            recordLastSeen(name, nick);
+
+                            if (nick.equalsIgnoreCase(myNick)) return;
+
+                            if (isDuplicateMessage(name, nick, nick, text)) return;
 
                             if (SignalStore.isSignalMessage(text)) {
                                 enqueueOrDeliver(name, nick, nick, text, null);
@@ -530,6 +812,7 @@ public class IrcService extends Service {
                             if (event.getUser() == null) return;
                             String nick = event.getUser().getNick();
                             if (nick == null || nick.isEmpty()) return;
+                            if (isHistServ(nick)) return;
                             String notice = event.getNotice();
 
                             if (notice != null && notice.getBytes(StandardCharsets.UTF_8).length
@@ -543,6 +826,11 @@ public class IrcService extends Service {
 
                         @Override
                         public void onJoin(JoinEvent event) {
+                            String joinedNick =
+                                    event.getUser() != null ? event.getUser().getNick() : null;
+                            if (joinedNick != null && joinedNick.equalsIgnoreCase(myNick)) {
+                                requestHistory(name, event.getChannel().getName());
+                            }
                             mainHandler.postDelayed(() -> {
                                 if (st.bot != null)
                                     notifyMembersChanged(name,
@@ -777,6 +1065,9 @@ public class IrcService extends Service {
     private void maybeNotifyDm(String serverName, String fromNick,
                                String preview, String imageUrl, boolean encrypted) {
         if (appVisible && listener != null) return;
+
+        ServerState st = states.get(serverName);
+        if (st != null && System.currentTimeMillis() < st.historyBackfillUntilMs) return;
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
