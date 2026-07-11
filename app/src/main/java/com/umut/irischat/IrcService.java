@@ -27,6 +27,7 @@ import androidx.core.app.NotificationCompat;
 import org.pircbotx.Configuration;
 import org.pircbotx.PircBotX;
 import org.pircbotx.User;
+import org.pircbotx.cap.EnableCapHandler;
 import org.pircbotx.exception.IrcException;
 import org.pircbotx.hooks.ListenerAdapter;
 import org.pircbotx.hooks.events.ConnectEvent;
@@ -75,12 +76,12 @@ public class IrcService extends Service {
     private static final int  MAX_INBOUND_MSG_BYTES    = 8192;
     private static final int  MAX_OUTBOUND_MSG_BYTES   = 400;
 
-    private static final int  HISTORY_BACKFILL_COUNT      = 50;
-    private static final int  HISTORY_BACKFILL_MAX         = 200;
+    private static final int  HISTORY_BACKFILL_COUNT      = 100;
+    private static final int  HISTORY_BACKFILL_MAX         = 500;
     private static final long HISTORY_BACKFILL_WINDOW_MS  = 8_000L;
-    private static final long MIN_HISTORY_REQUEST_INTERVAL_MS = 3_000L;
-    private static final long HISTORY_REQUEST_STAGGER_MS = 300L;
-    private static final long HISTORY_REQUEST_STAGGER_CAP_MS = 6_000L;
+    private static final long MIN_HISTORY_REQUEST_INTERVAL_MS = 1_000L;
+    private static final long HISTORY_REQUEST_STAGGER_MS = 75L;
+    private static final long HISTORY_REQUEST_STAGGER_CAP_MS = 1_500L;
 
     public class LocalBinder extends Binder {
         IrcService getService() { return IrcService.this; }
@@ -195,11 +196,50 @@ public class IrcService extends Service {
         return serverName + "\u0000" + target.toLowerCase(java.util.Locale.ROOT);
     }
 
-    private void recordLastSeen(String serverName, String target) {
+    private void recordLastSeen(String serverName, String target, long timestampMs) {
         String key = watermarkKey(serverName, target);
-        long now = System.currentTimeMillis();
-        lastSeenMs.put(key, now);
-        persistWatermark(key, now);
+        lastSeenMs.put(key, timestampMs);
+        persistWatermark(key, timestampMs);
+    }
+
+    private static class TimeTaggingInputParser extends org.pircbotx.InputParser {
+        volatile long lastLineServerTimeMs = 0L;
+
+        TimeTaggingInputParser(PircBotX bot) {
+            super(bot);
+        }
+
+        @Override
+        public void handleLine(String rawLine) throws IOException, IrcException {
+            lastLineServerTimeMs = parseServerTimeTag(rawLine);
+            super.handleLine(rawLine);
+        }
+
+        private static long parseServerTimeTag(String rawLine) {
+            if (rawLine == null || rawLine.isEmpty() || rawLine.charAt(0) != '@') {
+                return 0L;
+            }
+            int spaceIdx = rawLine.indexOf(' ');
+            String tagBlock = spaceIdx >= 0 ? rawLine.substring(1, spaceIdx) : rawLine.substring(1);
+            for (String tag : tagBlock.split(";")) {
+                if (tag.startsWith("time=")) {
+                    try {
+                        return java.time.Instant.parse(tag.substring(5)).toEpochMilli();
+                    } catch (Exception e) {
+                        return 0L;
+                    }
+                }
+            }
+            return 0L;
+        }
+    }
+
+    private static long extractServerTimeMs(ServerState st) {
+        TimeTaggingInputParser parser = st.inputParser;
+        if (parser != null && parser.lastLineServerTimeMs > 0L) {
+            return parser.lastLineServerTimeMs;
+        }
+        return System.currentTimeMillis();
     }
 
     private static boolean isHistServ(String nick) {
@@ -328,6 +368,7 @@ public class IrcService extends Service {
         volatile Future<?> retryFuture;
         volatile long historyBackfillUntilMs = 0L;
         final AtomicInteger historyRequestSeq = new AtomicInteger(0);
+        volatile TimeTaggingInputParser inputParser;
 
         ServerState(Server s) { this.server = s; }
     }
@@ -716,6 +757,14 @@ public class IrcService extends Service {
                     .setCapEnabled(true)
                     .setSocketTimeout(120_000)
                     .setAutoReconnect(false)
+                    .setBotFactory(new Configuration.BotFactory() {
+                        @Override
+                        public org.pircbotx.InputParser createInputParser(PircBotX bot) {
+                            TimeTaggingInputParser parser = new TimeTaggingInputParser(bot);
+                            st.inputParser = parser;
+                            return parser;
+                        }
+                    })
                     .addListener(new ListenerAdapter() {
 
                         @Override
@@ -763,7 +812,7 @@ public class IrcService extends Service {
                                 return;
                             }
 
-                            recordLastSeen(name, channel);
+                            recordLastSeen(name, channel, extractServerTimeMs(st));
 
                             if (nick.equalsIgnoreCase(myNick)) return;
 
@@ -788,7 +837,7 @@ public class IrcService extends Service {
                                 return;
                             }
 
-                            recordLastSeen(name, nick);
+                            recordLastSeen(name, nick, extractServerTimeMs(st));
 
                             if (nick.equalsIgnoreCase(myNick)) return;
 
@@ -865,6 +914,8 @@ public class IrcService extends Service {
 
             for (String ch : st.server.getChannels()) builder.addAutoJoinChannel(ch);
             if (st.server.hasPassword()) builder.setServerPassword(st.server.getPassword());
+
+            builder.addCapHandler(new EnableCapHandler("server-time"));
 
             if (st.server.hasSasl()) {
                 final String saslLogin = st.server.getSaslLogin();

@@ -1057,6 +1057,8 @@ public class MainActivity extends AppCompatActivity {
         if (idx >= 0) viewPager.setCurrentItem(idx, true);
 
         if (isNewTab && serviceBound && ircService.isConnected(serverName)) {
+            ircService.requestHistory(serverName, nick);
+
             Server srv = knownServers.get(serverName);
             boolean isSelf = srv != null && srv.getNickname().equalsIgnoreCase(nick);
             boolean dmAdEnabled = "true".equals(crypto.getString(KEY_DM_ADVERTISEMENT, null));
