@@ -137,6 +137,59 @@ public final class MessageDatabase {
                 keySnapshot);
     }
 
+    public List<String> getKnownTargetsForServer(String serverName) {
+        List<String> targets = new ArrayList<>();
+        if (serverName == null || serverName.isEmpty()) return targets;
+
+        String prefix = serverName + "/";
+        String escapedPrefix = prefix
+                .replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_");
+        Cursor c = helper.getReadableDatabase().rawQuery(
+                "SELECT DISTINCT " + COL_TAB_KEY + " FROM " + TABLE +
+                        " WHERE " + COL_TAB_KEY + " LIKE ? ESCAPE '\\'",
+                new String[]{escapedPrefix + "%"});
+        try {
+            int iTabKey = c.getColumnIndexOrThrow(COL_TAB_KEY);
+            while (c.moveToNext()) {
+                String tabKey = c.getString(iTabKey);
+                if (tabKey == null || !tabKey.startsWith(prefix)) continue;
+                String target = tabKey.substring(prefix.length());
+                if (!target.isEmpty()) targets.add(target);
+            }
+        } finally {
+            c.close();
+        }
+        return targets;
+    }
+
+    public boolean existsAtTimestamp(String tabKey, String nick, String text, long timestamp) {
+        byte[] keySnapshot = requireKey();
+        Cursor c = helper.getReadableDatabase().rawQuery(
+                "SELECT " + COL_NICK + "," + COL_BODY + " FROM " + TABLE +
+                        " WHERE " + COL_TAB_KEY + "=? AND " + COL_TIMESTAMP + "=?",
+                new String[]{tabKey, String.valueOf(timestamp)});
+        try {
+            int iNick = c.getColumnIndexOrThrow(COL_NICK);
+            int iBody = c.getColumnIndexOrThrow(COL_BODY);
+            while (c.moveToNext()) {
+                try {
+                    String storedNick = decryptNullable(c.getBlob(iNick), keySnapshot);
+                    String storedBody = decryptBytes(c.getBlob(iBody), keySnapshot);
+                    if (java.util.Objects.equals(storedNick, nick)
+                            && java.util.Objects.equals(storedBody, text)) {
+                        return true;
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        } finally {
+            c.close();
+        }
+        return false;
+    }
+
     public long getMaxTimestampForTab(String tabKey) {
         Cursor c = helper.getReadableDatabase().rawQuery(
                 "SELECT MAX(" + COL_TIMESTAMP + ") FROM " + TABLE + " WHERE " + COL_TAB_KEY + "=?",

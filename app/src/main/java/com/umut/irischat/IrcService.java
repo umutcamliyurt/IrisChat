@@ -83,6 +83,10 @@ public class IrcService extends Service {
     private static final long HISTORY_REQUEST_STAGGER_MS = 75L;
     private static final long HISTORY_REQUEST_STAGGER_CAP_MS = 1_500L;
 
+    private static final int  MAX_BACKFILL_CONTINUATIONS   = 40;
+    private static final int  MAX_CHATHISTORY_FAIL_RETRIES = 4;
+    private static final long CHATHISTORY_FAIL_RETRY_BASE_MS = 3_000L;
+
     public class LocalBinder extends Binder {
         IrcService getService() { return IrcService.this; }
     }
@@ -202,35 +206,57 @@ public class IrcService extends Service {
         persistWatermark(key, timestampMs);
     }
 
-    private static class TimeTaggingInputParser extends org.pircbotx.InputParser {
-        volatile long lastLineServerTimeMs = 0L;
+    private class TimeTaggingInputParser extends org.pircbotx.InputParser {
+        volatile long   lastLineServerTimeMs = 0L;
+        volatile String lastLineMsgId        = null;
 
-        TimeTaggingInputParser(PircBotX bot) {
+        private final String      serverName;
+        private final ServerState state;
+
+        TimeTaggingInputParser(PircBotX bot, String serverName, ServerState state) {
             super(bot);
+            this.serverName = serverName;
+            this.state      = state;
         }
 
         @Override
         public void handleLine(String rawLine) throws IOException, IrcException {
-            lastLineServerTimeMs = parseServerTimeTag(rawLine);
+            lastLineServerTimeMs = parseTagValue(rawLine, "time=", true);
+            lastLineMsgId        = parseTagString(rawLine, "msgid=");
+
+            String batchRef = parseTagString(rawLine, "batch=");
+            if (batchRef != null) {
+                trackChathistoryBatchLine(state, batchRef);
+            }
+
+            handleBatchControlLine(serverName, state, rawLine);
+            handleChathistoryFailLine(serverName, state, rawLine);
+
             super.handleLine(rawLine);
         }
 
-        private static long parseServerTimeTag(String rawLine) {
-            if (rawLine == null || rawLine.isEmpty() || rawLine.charAt(0) != '@') {
+        private long parseTagValue(String rawLine, String prefix, boolean isTimestamp) {
+            String v = parseTagString(rawLine, prefix);
+            if (v == null) return 0L;
+            if (!isTimestamp) return 0L;
+            try {
+                return java.time.Instant.parse(v).toEpochMilli();
+            } catch (Exception e) {
                 return 0L;
             }
+        }
+
+        private String parseTagString(String rawLine, String prefix) {
+            if (rawLine == null || rawLine.isEmpty() || rawLine.charAt(0) != '@') return null;
             int spaceIdx = rawLine.indexOf(' ');
             String tagBlock = spaceIdx >= 0 ? rawLine.substring(1, spaceIdx) : rawLine.substring(1);
             for (String tag : tagBlock.split(";")) {
-                if (tag.startsWith("time=")) {
-                    try {
-                        return java.time.Instant.parse(tag.substring(5)).toEpochMilli();
-                    } catch (Exception e) {
-                        return 0L;
-                    }
+                if (tag.startsWith(prefix)) {
+                    String v = tag.substring(prefix.length());
+                    return v.isEmpty() ? null : v;
                 }
             }
-            return 0L;
+            return null;
         }
     }
 
@@ -240,6 +266,116 @@ public class IrcService extends Service {
             return parser.lastLineServerTimeMs;
         }
         return System.currentTimeMillis();
+    }
+
+    private static String extractServerMsgId(ServerState st) {
+        TimeTaggingInputParser parser = st.inputParser;
+        return parser != null ? parser.lastLineMsgId : null;
+    }
+
+    private static String stripTags(String rawLine) {
+        if (rawLine == null) return null;
+        if (rawLine.startsWith("@")) {
+            int sp = rawLine.indexOf(' ');
+            return sp >= 0 ? rawLine.substring(sp + 1) : null;
+        }
+        return rawLine;
+    }
+
+    private void trackChathistoryBatchLine(ServerState st, String batchRef) {
+        if (st.chathistoryBatchTargets.containsKey(batchRef)) {
+            st.chathistoryBatchCounts.merge(batchRef, 1, Integer::sum);
+        }
+    }
+
+    private void handleBatchControlLine(String serverName, ServerState st, String rawLine) {
+        String line = stripTags(rawLine);
+        if (line == null || line.isEmpty()) return;
+
+        String[] parts = line.split(" ");
+        int idx = 0;
+        if (parts.length > 0 && parts[0].startsWith(":")) idx = 1;
+        if (parts.length <= idx || !parts[idx].equalsIgnoreCase("BATCH")) return;
+        if (parts.length <= idx + 1) return;
+
+        String refToken = parts[idx + 1];
+        if (refToken.length() < 2) return;
+
+        if (refToken.charAt(0) == '+') {
+            if (parts.length <= idx + 3) return;
+            String type = parts[idx + 2];
+            if (!type.equalsIgnoreCase("chathistory")) return;
+            String ref    = refToken.substring(1);
+            String target = parts[idx + 3];
+            st.chathistoryBatchTargets.put(ref, target);
+            st.chathistoryBatchCounts.put(ref, 0);
+        } else if (refToken.charAt(0) == '-') {
+            String ref = refToken.substring(1);
+            String target = st.chathistoryBatchTargets.remove(ref);
+            Integer count = st.chathistoryBatchCounts.remove(ref);
+            if (target != null && count != null) {
+                onChathistoryBatchComplete(serverName, st, target, count);
+            }
+        }
+    }
+
+    private void handleChathistoryFailLine(String serverName, ServerState st, String rawLine) {
+        String line = stripTags(rawLine);
+        if (line == null || line.isEmpty()) return;
+
+        String[] parts = line.split(" ");
+        int idx = (parts.length > 0 && parts[0].startsWith(":")) ? 1 : 0;
+        if (parts.length <= idx + 1) return;
+        if (!parts[idx].equalsIgnoreCase("FAIL")) return;
+        if (!parts[idx + 1].equalsIgnoreCase("CHATHISTORY")) return;
+
+        Log.w(TAG, "CHATHISTORY FAIL on " + serverName + ": " + rawLine);
+
+        java.util.Set<String> targets = new java.util.HashSet<>(st.inFlightChathistoryTargets);
+        if (targets.isEmpty()) return;
+        for (String target : targets) {
+            st.inFlightChathistoryTargets.remove(target);
+            scheduleChathistoryFailRetry(serverName, st, target);
+        }
+    }
+
+    private void onChathistoryBatchComplete(String serverName, ServerState st, String target, int count) {
+        st.inFlightChathistoryTargets.remove(target);
+        String rateKey = watermarkKey(serverName, target);
+        chathistoryFailRetryCount.remove(rateKey);
+
+        if (count < HISTORY_BACKFILL_MAX) {
+            backfillContinuationCount.remove(rateKey);
+            return;
+        }
+
+        int continuations = backfillContinuationCount.merge(rateKey, 1, Integer::sum);
+        if (continuations > MAX_BACKFILL_CONTINUATIONS) {
+            Log.w(TAG, "CHATHISTORY backfill for " + rateKey
+                    + " exceeded continuation limit (" + MAX_BACKFILL_CONTINUATIONS
+                    + "); stopping to avoid a runaway loop.");
+            return;
+        }
+
+        Log.i(TAG, "CHATHISTORY batch for " + rateKey + " hit the " + HISTORY_BACKFILL_MAX
+                + "-message cap (continuation #" + continuations + ") — requesting next page");
+        mainHandler.post(() -> requestHistory(serverName, target));
+    }
+
+    private void scheduleChathistoryFailRetry(String serverName, ServerState st, String target) {
+        String rateKey = watermarkKey(serverName, target);
+        int attempt = chathistoryFailRetryCount.merge(rateKey, 1, Integer::sum);
+        if (attempt > MAX_CHATHISTORY_FAIL_RETRIES) {
+            Log.w(TAG, "CHATHISTORY for " + rateKey + " failed " + attempt
+                    + " times in a row; giving up until the next reconnect/tab-open.");
+            return;
+        }
+        long delay = CHATHISTORY_FAIL_RETRY_BASE_MS * attempt;
+        mainHandler.postDelayed(() -> {
+            if (!st.shouldRun.get() || !st.connected.get()) return;
+            lastHistoryRequestMs.remove(rateKey);
+            requestHistory(serverName, target);
+        }, delay);
     }
 
     private static boolean isHistServ(String nick) {
@@ -252,11 +388,28 @@ public class IrcService extends Service {
     private final AtomicInteger dedupeInsertCount = new AtomicInteger(0);
 
     private boolean isDuplicateMessage(String serverName, String target, String nick, String text) {
-        String raw = watermarkKey(serverName, target) + "\u0000" + nick + "\u0000" + (text != null ? text : "");
-        String key = fingerprintHash(raw);
+        return isDuplicateMessage(serverName, target, nick, text, null, 0L);
+    }
+
+    private boolean isDuplicateMessage(String serverName, String target, String nick, String text,
+                                       String msgId, long timestampMs) {
+        String rateKey = watermarkKey(serverName, target);
+        String variablePart = (msgId != null && !msgId.isEmpty())
+                ? "msgid\u0000" + msgId
+                : nick + "\u0000" + (text != null ? text : "");
+        String key = rateKey + "\u0000" + fingerprintHash(variablePart);
         long now = System.currentTimeMillis();
         Long prevExpiry = recentMessageFingerprints.put(key, now + DEDUPE_WINDOW_MS);
         boolean duplicate = prevExpiry != null && now < prevExpiry;
+
+        if (!duplicate && timestampMs > 0) {
+            try {
+                duplicate = MessageDatabase.get(this)
+                        .existsAtTimestamp(dbTabKey(serverName, target), nick, text, timestampMs);
+            } catch (Exception e) {
+                Log.w(TAG, "isDuplicateMessage: persistent dedupe check failed for " + rateKey, e);
+            }
+        }
 
         if (dedupeInsertCount.incrementAndGet() % 200 == 0) {
             long cutoff = now;
@@ -369,6 +522,12 @@ public class IrcService extends Service {
         volatile long historyBackfillUntilMs = 0L;
         final AtomicInteger historyRequestSeq = new AtomicInteger(0);
         volatile TimeTaggingInputParser inputParser;
+
+        final Map<String, String>  chathistoryBatchTargets = new java.util.concurrent.ConcurrentHashMap<>();
+        final Map<String, Integer> chathistoryBatchCounts  = new java.util.concurrent.ConcurrentHashMap<>();
+
+        final java.util.Set<String> inFlightChathistoryTargets =
+                java.util.concurrent.ConcurrentHashMap.newKeySet();
 
         ServerState(Server s) { this.server = s; }
     }
@@ -574,6 +733,8 @@ public class IrcService extends Service {
         pendingHistoryRequest.keySet().removeIf(k -> k.startsWith(prefix));
         recentMessageFingerprints.keySet().removeIf(k -> k.startsWith(prefix));
         lastPersistedMs.keySet().removeIf(k -> k.startsWith(prefix));
+        backfillContinuationCount.keySet().removeIf(k -> k.startsWith(prefix));
+        chathistoryFailRetryCount.keySet().removeIf(k -> k.startsWith(prefix));
         purgePersistedWatermarksFor(serverName);
     }
 
@@ -616,6 +777,37 @@ public class IrcService extends Service {
             new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Boolean> pendingHistoryRequest =
             new java.util.concurrent.ConcurrentHashMap<>();
+
+    private final Map<String, Integer> backfillContinuationCount =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private final Map<String, Integer> chathistoryFailRetryCount =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private void backfillKnownDmTargets(String serverName) {
+        ServerState st = states.get(serverName);
+        if (st == null) return;
+        final java.util.Set<String> channelSet = new java.util.HashSet<>();
+        for (String ch : st.server.getChannels()) channelSet.add(ch.toLowerCase(java.util.Locale.ROOT));
+
+        safeExecute(workerExecutor, "backfillKnownDmTargets[" + serverName + "]", () -> {
+            List<String> targets;
+            try {
+                targets = MessageDatabase.get(this).getKnownTargetsForServer(serverName);
+            } catch (Exception e) {
+                Log.w(TAG, "backfillKnownDmTargets: failed to list targets for " + serverName, e);
+                return;
+            }
+            for (String target : targets) {
+                if (target == null || target.isEmpty()) continue;
+                String lower = target.toLowerCase(java.util.Locale.ROOT);
+                if (channelSet.contains(lower) || lower.startsWith("#") || lower.startsWith("&")) {
+                    continue;
+                }
+                mainHandler.post(() -> requestHistory(serverName, target));
+            }
+        });
+    }
 
     public boolean requestHistory(String serverName, String target) {
         ServerState st = states.get(serverName);
@@ -680,7 +872,7 @@ public class IrcService extends Service {
 
         final String query;
         if (since != null) {
-            String ts = formatHistoryTimestamp(since);
+            String ts = formatHistoryTimestamp(since - 1);
             query = "CHATHISTORY AFTER " + safeTarget + " timestamp=" + ts
                     + " " + HISTORY_BACKFILL_MAX;
         } else {
@@ -691,8 +883,10 @@ public class IrcService extends Service {
             PircBotX bot2 = st.bot;
             if (bot2 == null || !st.connected.get()) return;
             try {
+                st.inFlightChathistoryTargets.add(safeTarget);
                 bot2.sendRaw().rawLine(query);
             } catch (Exception e) {
+                st.inFlightChathistoryTargets.remove(safeTarget);
                 Log.w(TAG, "requestHistory error [" + serverName + "]", e);
             }
         });
@@ -701,6 +895,14 @@ public class IrcService extends Service {
     private static String stripIrcInjection(String s) {
         if (s == null) return null;
         return s.replace("\r", "").replace("\n", "");
+    }
+
+    private static final String TRUNCATION_MARKER = " […truncated]";
+
+    private static String truncateOversizedInbound(String text, int maxBytes) {
+        if (text == null) return null;
+        String truncated = truncateToByteLimit(text, maxBytes);
+        return truncated.length() < text.length() ? truncated + TRUNCATION_MARKER : truncated;
     }
 
     private static String truncateToByteLimit(String s, int maxBytes) {
@@ -725,6 +927,9 @@ public class IrcService extends Service {
             st.bot = null;
         }
         st.connected.set(false);
+        st.chathistoryBatchTargets.clear();
+        st.chathistoryBatchCounts.clear();
+        st.inFlightChathistoryTargets.clear();
     }
 
     private void notifyMembersChanged(String serverName, String channel, PircBotX bot,
@@ -760,7 +965,8 @@ public class IrcService extends Service {
                     .setBotFactory(new Configuration.BotFactory() {
                         @Override
                         public org.pircbotx.InputParser createInputParser(PircBotX bot) {
-                            TimeTaggingInputParser parser = new TimeTaggingInputParser(bot);
+                            TimeTaggingInputParser parser =
+                                    new TimeTaggingInputParser(bot, name, st);
                             st.inputParser = parser;
                             return parser;
                         }
@@ -772,11 +978,15 @@ public class IrcService extends Service {
                             st.connected.set(true);
                             st.retryCount.set(0);
                             st.historyRequestSeq.set(0);
+                            st.chathistoryBatchTargets.clear();
+                            st.chathistoryBatchCounts.clear();
                             releaseWakeLock();
                             refreshNotification();
                             Listener l = listener;
                             if (l != null) mainHandler.post(() -> l.onConnected(name));
                             Log.i(TAG, "Connected to " + name);
+
+                            backfillKnownDmTargets(name);
                         }
 
                         @Override
@@ -806,17 +1016,19 @@ public class IrcService extends Service {
 
                             if (isHistServ(nick)) return;
 
+                            long serverTimeMs = extractServerTimeMs(st);
+                            recordLastSeen(name, channel, serverTimeMs);
+
                             if (text != null && text.getBytes(StandardCharsets.UTF_8).length
                                     > MAX_INBOUND_MSG_BYTES) {
-                                Log.w(TAG, "onMessage: oversized message from " + nick + " dropped");
-                                return;
+                                Log.w(TAG, "onMessage: oversized message from " + nick + " truncated");
+                                text = truncateOversizedInbound(text, MAX_INBOUND_MSG_BYTES);
                             }
-
-                            recordLastSeen(name, channel, extractServerTimeMs(st));
 
                             if (nick.equalsIgnoreCase(myNick)) return;
 
-                            if (isDuplicateMessage(name, channel, nick, text)) return;
+                            if (isDuplicateMessage(name, channel, nick, text,
+                                    extractServerMsgId(st), serverTimeMs)) return;
 
                             String imgUrl = MainActivity.extractImageUrl(text);
                             String display = imgUrl != null
@@ -831,17 +1043,19 @@ public class IrcService extends Service {
 
                             if (isHistServ(nick)) return;
 
+                            long serverTimeMs = extractServerTimeMs(st);
+                            recordLastSeen(name, nick, serverTimeMs);
+
                             if (text != null && text.getBytes(StandardCharsets.UTF_8).length
                                     > MAX_INBOUND_MSG_BYTES) {
-                                Log.w(TAG, "onPrivateMessage: oversized message from " + nick + " dropped");
-                                return;
+                                Log.w(TAG, "onPrivateMessage: oversized message from " + nick + " truncated");
+                                text = truncateOversizedInbound(text, MAX_INBOUND_MSG_BYTES);
                             }
-
-                            recordLastSeen(name, nick, extractServerTimeMs(st));
 
                             if (nick.equalsIgnoreCase(myNick)) return;
 
-                            if (isDuplicateMessage(name, nick, nick, text)) return;
+                            if (isDuplicateMessage(name, nick, nick, text,
+                                    extractServerMsgId(st), serverTimeMs)) return;
 
                             if (SignalStore.isSignalMessage(text)) {
                                 enqueueOrDeliver(name, nick, nick, text, null);
@@ -862,12 +1076,13 @@ public class IrcService extends Service {
                             String nick = event.getUser().getNick();
                             if (nick == null || nick.isEmpty()) return;
                             if (isHistServ(nick)) return;
+                            if (nick.equalsIgnoreCase(myNick)) return;
                             String notice = event.getNotice();
 
                             if (notice != null && notice.getBytes(StandardCharsets.UTF_8).length
                                     > MAX_INBOUND_MSG_BYTES) {
-                                Log.w(TAG, "onNotice: oversized notice from " + nick + " dropped");
-                                return;
+                                Log.w(TAG, "onNotice: oversized notice from " + nick + " truncated");
+                                notice = truncateOversizedInbound(notice, MAX_INBOUND_MSG_BYTES);
                             }
 
                             enqueueOrDeliverNotice(name, nick, notice);
@@ -916,6 +1131,9 @@ public class IrcService extends Service {
             if (st.server.hasPassword()) builder.setServerPassword(st.server.getPassword());
 
             builder.addCapHandler(new EnableCapHandler("server-time"));
+            builder.addCapHandler(new EnableCapHandler("message-tags"));
+            builder.addCapHandler(new EnableCapHandler("draft/chathistory"));
+            builder.addCapHandler(new EnableCapHandler("batch"));
 
             if (st.server.hasSasl()) {
                 final String saslLogin = st.server.getSaslLogin();
