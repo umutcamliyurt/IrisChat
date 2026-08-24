@@ -103,6 +103,7 @@ public class MainActivity extends AppCompatActivity {
     private ImageButton addServerButton;
     ImageButton sendButton;
     private ImageButton membersButton;
+    private ImageButton discoverButton;
     private EditText    chatInput;
     TabLayout   tabLayout;
     private ViewPager2  viewPager;
@@ -289,6 +290,20 @@ public class MainActivity extends AppCompatActivity {
                         sheet.updateMembers(sortedNicks);
                     }
                 }
+
+                @Override public void onChannelListStarted(String serverName) {
+                    ChannelDiscoverySheet sheet = currentDiscoverySheet(serverName);
+                    if (sheet != null) sheet.onListStarted();
+                }
+                @Override public void onChannelListEntry(String serverName, String channel,
+                                                         int userCount, String topic) {
+                    ChannelDiscoverySheet sheet = currentDiscoverySheet(serverName);
+                    if (sheet != null) sheet.onEntry(channel, userCount, topic);
+                }
+                @Override public void onChannelListComplete(String serverName) {
+                    ChannelDiscoverySheet sheet = currentDiscoverySheet(serverName);
+                    if (sheet != null) sheet.onListComplete();
+                }
             });
 
             for (Server s : knownServers.values()) ircService.connect(s);
@@ -358,6 +373,7 @@ public class MainActivity extends AppCompatActivity {
         addServerButton = findViewById(R.id.switchServerButton);
         sendButton      = findViewById(R.id.sendButton);
         membersButton   = findViewById(R.id.membersButton);
+        discoverButton  = findViewById(R.id.discoverButton);
         chatInput       = findViewById(R.id.chatInput);
         tabLayout       = findViewById(R.id.tabLayout);
         viewPager       = findViewById(R.id.viewPager);
@@ -401,6 +417,8 @@ public class MainActivity extends AppCompatActivity {
 
         membersButton.setOnClickListener(v -> showMembersSheet());
 
+        discoverButton.setOnClickListener(v -> showChannelDiscoverySheet());
+
         tabLayout.setTabMode(TabLayout.MODE_SCROLLABLE);
 
         pagerAdapter = new ChannelPagerAdapter(this);
@@ -412,6 +430,7 @@ public class MainActivity extends AppCompatActivity {
         tabLayout.addOnTabSelectedListener(new com.google.android.material.tabs.TabLayout.OnTabSelectedListener() {
             @Override public void onTabSelected(com.google.android.material.tabs.TabLayout.Tab tab) {
                 updateMembersButtonVisibility();
+                updateDiscoverButtonVisibility();
             }
             @Override public void onTabUnselected(com.google.android.material.tabs.TabLayout.Tab tab) {}
             @Override public void onTabReselected(com.google.android.material.tabs.TabLayout.Tab tab) {}
@@ -419,6 +438,7 @@ public class MainActivity extends AppCompatActivity {
         viewPager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
             @Override public void onPageSelected(int position) {
                 updateMembersButtonVisibility();
+                updateDiscoverButtonVisibility();
             }
         });
 
@@ -511,6 +531,13 @@ public class MainActivity extends AppCompatActivity {
         membersButton.setVisibility(show ? View.VISIBLE : View.GONE);
     }
 
+    private void updateDiscoverButtonVisibility() {
+        String serverName = currentServerName();
+        boolean show = serverName != null && serviceBound && ircService != null
+                && ircService.isConnected(serverName);
+        discoverButton.setVisibility(show ? View.VISIBLE : View.GONE);
+    }
+
     private void showMembersSheet() {
         int cur = viewPager.getCurrentItem();
         if (cur >= tabKeys.size()) return;
@@ -533,6 +560,289 @@ public class MainActivity extends AppCompatActivity {
         sheet.setOnDmListener(nick -> openDmTab(serverName, nick));
         sheet.show(getSupportFragmentManager(), MembersSheet.TAG);
     }
+
+    private ChannelDiscoverySheet currentDiscoverySheet(String serverName) {
+        ChannelDiscoverySheet sheet = (ChannelDiscoverySheet) getSupportFragmentManager()
+                .findFragmentByTag(ChannelDiscoverySheet.TAG);
+        if (sheet == null || !serverName.equals(sheet.getServerName())) return null;
+        return sheet;
+    }
+
+    private void showChannelDiscoverySheet() {
+        String serverName = currentServerName();
+        if (serverName == null) {
+            Toast.makeText(this, getString(R.string.no_connected_server), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!serviceBound || ircService == null || !ircService.isConnected(serverName)) {
+            Toast.makeText(this, getString(R.string.server_not_connected, serverName), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        ChannelDiscoverySheet sheet = ChannelDiscoverySheet.newInstance(serverName);
+        sheet.setOnJoinListener(channel -> joinDiscoveredChannel(serverName, channel));
+        sheet.show(getSupportFragmentManager(), ChannelDiscoverySheet.TAG);
+
+        ircService.requestChannelList(serverName);
+    }
+
+    void joinDiscoveredChannel(String serverName, String channel) {
+        if (!serviceBound || ircService == null || !ircService.isConnected(serverName)) {
+            Toast.makeText(this, getString(R.string.server_not_connected, serverName), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (channel == null || channel.isEmpty()
+                || (!channel.startsWith("#") && !channel.startsWith("&"))) {
+            return;
+        }
+
+        boolean sent = ircService.sendRaw(serverName, "JOIN " + channel);
+        if (!sent) {
+            Toast.makeText(this, getString(R.string.send_failed), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String key = tabKey(serverName, channel);
+        boolean isNewTab;
+        synchronized (stateLock) {
+            isNewTab = !chatLogs.containsKey(key);
+            if (isNewTab) {
+                chatLogs.put(key, new ArrayList<>());
+                tabKeys.add(key);
+            }
+        }
+        if (isNewTab) {
+            pagerAdapter.notifyDataSetChanged();
+            ircService.requestHistory(serverName, channel);
+        }
+
+        Server srv = knownServers.get(serverName);
+        if (srv != null && !srv.getChannels().contains(channel)) {
+            List<String> updated = new ArrayList<>(srv.getChannels());
+            updated.add(channel);
+            srv.setChannels(updated);
+            scheduleSave();
+        }
+
+        int idx = tabKeys.indexOf(key);
+        if (idx >= 0) viewPager.setCurrentItem(idx, true);
+    }
+
+    public static class ChannelDiscoverySheet extends BottomSheetDialogFragment {
+
+        public static final String TAG = "channel_discovery_sheet";
+
+        private static final String ARG_SERVER_NAME = "server_name";
+
+        interface OnJoinListener { void onJoin(String channel); }
+        private OnJoinListener joinListener;
+        private ChannelDiscoveryAdapter discoveryAdapter;
+
+        private TextView countView;
+        private android.widget.ProgressBar progressView;
+        private TextView emptyView;
+
+        public static ChannelDiscoverySheet newInstance(String serverName) {
+            ChannelDiscoverySheet f = new ChannelDiscoverySheet();
+            Bundle args = new Bundle();
+            args.putString(ARG_SERVER_NAME, serverName);
+            f.setArguments(args);
+            return f;
+        }
+
+        public String getServerName() {
+            return getArguments() != null ? getArguments().getString(ARG_SERVER_NAME, "") : "";
+        }
+
+        public void setOnJoinListener(OnJoinListener l) { this.joinListener = l; }
+
+        public void onListStarted() {
+            if (discoveryAdapter != null) discoveryAdapter.clear();
+            if (progressView != null) progressView.setVisibility(View.VISIBLE);
+            if (emptyView != null) emptyView.setVisibility(View.GONE);
+            if (countView != null) {
+                countView.setText(getString(R.string.channels_loading));
+            }
+        }
+
+        public void onEntry(String channel, int userCount, String topic) {
+            if (discoveryAdapter != null) discoveryAdapter.addEntry(channel, userCount, topic);
+        }
+
+        public void onListComplete() {
+            if (progressView != null) progressView.setVisibility(View.GONE);
+            if (discoveryAdapter != null) {
+                boolean empty = discoveryAdapter.getItemCount() == 0;
+                if (emptyView != null) emptyView.setVisibility(empty ? View.VISIBLE : View.GONE);
+                if (countView != null) {
+                    countView.setText(getString(R.string.channels_found, discoveryAdapter.totalCount()));
+                }
+            }
+        }
+
+        @NonNull
+        @Override
+        public android.app.Dialog onCreateDialog(@Nullable Bundle savedInstanceState) {
+            BottomSheetDialog dialog = (BottomSheetDialog) super.onCreateDialog(savedInstanceState);
+            dialog.setOnShowListener(d -> {
+                View sheet = ((BottomSheetDialog) d)
+                        .findViewById(com.google.android.material.R.id.design_bottom_sheet);
+                if (sheet != null) {
+                    sheet.post(() -> {
+                        int height = (int) (sheet.getRootView().getHeight() * 0.75);
+                        sheet.getLayoutParams().height = height;
+                        sheet.requestLayout();
+                        BottomSheetBehavior<View> behavior = BottomSheetBehavior.from(sheet);
+                        behavior.setPeekHeight(height);
+                        behavior.setState(BottomSheetBehavior.STATE_EXPANDED);
+                    });
+                }
+            });
+            return dialog;
+        }
+
+        @Nullable
+        @Override
+        public View onCreateView(@NonNull LayoutInflater inflater,
+                                 @Nullable ViewGroup container,
+                                 @Nullable Bundle savedInstanceState) {
+            return inflater.inflate(R.layout.bottom_sheet_channel_discovery, container, false);
+        }
+
+        @Override
+        public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+            super.onViewCreated(view, savedInstanceState);
+
+            countView    = view.findViewById(R.id.discoverySheetCount);
+            progressView = view.findViewById(R.id.discoveryProgress);
+            emptyView    = view.findViewById(R.id.discoveryEmptyText);
+            EditText searchBox = view.findViewById(R.id.discoverySearchInput);
+            RecyclerView rv    = view.findViewById(R.id.discoveryRecycler);
+
+            rv.setLayoutManager(new LinearLayoutManager(requireContext()));
+
+            discoveryAdapter = new ChannelDiscoveryAdapter(channel -> {
+                if (joinListener != null) joinListener.onJoin(channel);
+                dismiss();
+            });
+            rv.setAdapter(discoveryAdapter);
+
+            progressView.setVisibility(View.VISIBLE);
+
+            searchBox.addTextChangedListener(new android.text.TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
+                @Override public void onTextChanged(CharSequence s, int st, int b, int c) {
+                    discoveryAdapter.filter(s.toString());
+                }
+                @Override public void afterTextChanged(android.text.Editable s) {}
+            });
+        }
+    }
+
+    static class ChannelDiscoveryAdapter
+            extends RecyclerView.Adapter<ChannelDiscoveryAdapter.VH> {
+
+        static class Entry {
+            final String channel;
+            final int    userCount;
+            final String topic;
+            Entry(String channel, int userCount, String topic) {
+                this.channel = channel; this.userCount = userCount; this.topic = topic;
+            }
+        }
+
+        interface OnJoinClickListener { void onClick(String channel); }
+
+        private final List<Entry> allEntries = new ArrayList<>();
+        private final List<Entry> shown      = new ArrayList<>();
+        private String filterQuery = "";
+        private final OnJoinClickListener joinClickListener;
+
+        ChannelDiscoveryAdapter(OnJoinClickListener l) { joinClickListener = l; }
+
+        void clear() {
+            allEntries.clear();
+            shown.clear();
+            notifyDataSetChanged();
+        }
+
+        void addEntry(String channel, int userCount, String topic) {
+            allEntries.add(new Entry(channel, userCount, topic));
+            if (matchesFilter(channel, topic)) {
+                shown.add(new Entry(channel, userCount, topic));
+                notifyItemInserted(shown.size() - 1);
+            }
+        }
+
+        int totalCount() { return allEntries.size(); }
+
+        private boolean matchesFilter(String channel, String topic) {
+            if (filterQuery.isEmpty()) return true;
+            String c = channel != null ? channel.toLowerCase(java.util.Locale.ROOT) : "";
+            String t = topic != null ? topic.toLowerCase(java.util.Locale.ROOT) : "";
+            return c.contains(filterQuery) || t.contains(filterQuery);
+        }
+
+        void filter(String query) {
+            filterQuery = query == null ? "" : query.trim().toLowerCase(java.util.Locale.ROOT);
+            shown.clear();
+            for (Entry e : allEntries) {
+                if (matchesFilter(e.channel, e.topic)) shown.add(e);
+            }
+            notifyDataSetChanged();
+        }
+
+        @NonNull
+        @Override
+        public VH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            View row = LayoutInflater.from(parent.getContext())
+                    .inflate(R.layout.item_channel_discovery, parent, false);
+            return new VH(row);
+        }
+
+        @Override
+        public void onBindViewHolder(@NonNull VH holder, int position) {
+            Entry entry = shown.get(position);
+            holder.name.setText(entry.channel);
+            holder.topic.setText(entry.topic == null || entry.topic.isEmpty()
+                    ? "" : entry.topic);
+            holder.topic.setVisibility(entry.topic == null || entry.topic.isEmpty()
+                    ? View.GONE : View.VISIBLE);
+            holder.users.setText(holder.itemView.getContext()
+                    .getResources().getQuantityString(
+                            R.plurals.channel_discovery_users, entry.userCount, entry.userCount));
+
+            holder.joinBtn.setTextColor(ThemeHelper.currentAccent);
+            android.graphics.drawable.Drawable joinBg = holder.joinBtn.getBackground();
+            if (joinBg != null) {
+                joinBg = joinBg.mutate();
+                androidx.core.graphics.drawable.DrawableCompat.setTint(joinBg, ThemeHelper.currentAccent);
+                holder.joinBtn.setBackground(joinBg);
+            }
+
+            holder.joinBtn.setOnClickListener(v -> {
+                if (joinClickListener != null) joinClickListener.onClick(entry.channel);
+            });
+            holder.itemView.setOnClickListener(v -> {
+                if (joinClickListener != null) joinClickListener.onClick(entry.channel);
+            });
+        }
+
+        @Override
+        public int getItemCount() { return shown.size(); }
+
+        static class VH extends RecyclerView.ViewHolder {
+            final TextView name, topic, users, joinBtn;
+            VH(View v) {
+                super(v);
+                name    = v.findViewById(R.id.channelDiscoveryName);
+                topic   = v.findViewById(R.id.channelDiscoveryTopic);
+                users   = v.findViewById(R.id.channelDiscoveryUsers);
+                joinBtn = v.findViewById(R.id.channelDiscoveryJoinButton);
+            }
+        }
+    }
+
     public static class MembersSheet extends BottomSheetDialogFragment {
 
         public static final String TAG = "members_sheet";
@@ -872,6 +1182,7 @@ public class MainActivity extends AppCompatActivity {
             statusLabel.setText(getString(R.string.status_disconnected));
             sendButton.setEnabled(false);
             sendButton.setAlpha(0.4f);
+            updateDiscoverButtonVisibility();
             return;
         }
         List<Server> connected = ircService.getConnectedServers();
@@ -886,6 +1197,7 @@ public class MainActivity extends AppCompatActivity {
             sendButton.setAlpha(1f);
         }
         updateMembersButtonVisibility();
+        updateDiscoverButtonVisibility();
     }
 
     private void sendMessage() {
@@ -900,6 +1212,13 @@ public class MainActivity extends AppCompatActivity {
 
         if (message.startsWith("/msg ")) {
             handleSlashMsg(message.substring(5).trim());
+            chatInput.setText("");
+            return;
+        }
+
+        if (message.startsWith("/raw ")) {
+            String args = message.substring(5).trim();
+            handleSlashRaw(args);
             chatInput.setText("");
             return;
         }
@@ -1019,6 +1338,25 @@ public class MainActivity extends AppCompatActivity {
         if (!text.isEmpty()) {
             chatInput.setText(text);
             sendMessage();
+        }
+    }
+
+    private void handleSlashRaw(String rawCommand) {
+        if (rawCommand.isEmpty()) return;
+
+        String serverName = currentServerName();
+        if (serverName == null) {
+            Toast.makeText(this, getString(R.string.no_connected_server), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!serviceBound || ircService == null || !ircService.isConnected(serverName)) {
+            Toast.makeText(this, getString(R.string.server_not_connected, serverName), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        boolean sent = ircService.sendRaw(serverName, rawCommand);
+        if (!sent) {
+            Toast.makeText(this, getString(R.string.send_failed), Toast.LENGTH_SHORT).show();
         }
     }
 

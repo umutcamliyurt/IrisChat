@@ -152,4 +152,14 @@ Session fingerprint (verify out-of-band):
         <item quantity="one">Encrypted message</item>
         <item quantity="other">%d new encrypted messages</item>
     </plurals>
+    <string name="discover_channels">Discover channels</string>
+    <string name="search_channels_hint">Search channels</string>
+    <string name="no_channels_found">No channels found</string>
+    <string name="channels_loading">Loading…</string>
+    <string name="channels_found">%d channels</string>
+    <string name="join">Join</string>
+    <plurals name="channel_discovery_users">
+        <item quantity="one">%d user</item>
+        <item quantity="other">%d users</item>
+    </plurals>
 </resources>

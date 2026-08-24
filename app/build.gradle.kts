@@ -15,8 +15,8 @@ android {
         applicationId = "com.umut.irischat"
         minSdk = 24
         targetSdk = 35
-        versionCode = 153
-        versionName = "1.5.3"
+        versionCode = 160
+        versionName = "1.6"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true
 

@@ -87,6 +87,10 @@ public class IrcService extends Service {
     private static final int  MAX_CHATHISTORY_FAIL_RETRIES = 4;
     private static final long CHATHISTORY_FAIL_RETRY_BASE_MS = 3_000L;
 
+    private static final int  MAX_LIST_ENTRIES_PER_REQUEST = 5_000;
+    private static final String RPL_LIST      = "322";
+    private static final String RPL_LISTEND   = "323";
+
     public class LocalBinder extends Binder {
         IrcService getService() { return IrcService.this; }
     }
@@ -104,6 +108,11 @@ public class IrcService extends Service {
         void onNotice(String serverName, String fromNick, String text);
         default void onMembersChanged(String serverName, String channel,
                                       List<String> sortedNicks) {}
+
+        default void onChannelListStarted(String serverName) {}
+        default void onChannelListEntry(String serverName, String channel,
+                                        int userCount, String topic) {}
+        default void onChannelListComplete(String serverName) {}
     }
 
     private volatile Listener listener;
@@ -231,6 +240,7 @@ public class IrcService extends Service {
 
             handleBatchControlLine(serverName, state, rawLine);
             handleChathistoryFailLine(serverName, state, rawLine);
+            handleChannelListLine(serverName, rawLine);
 
             super.handleLine(rawLine);
         }
@@ -336,6 +346,45 @@ public class IrcService extends Service {
         for (String target : targets) {
             st.inFlightChathistoryTargets.remove(target);
             scheduleChathistoryFailRetry(serverName, st, target);
+        }
+    }
+
+    private void handleChannelListLine(String serverName, String rawLine) {
+        String line = stripTags(rawLine);
+        if (line == null || line.isEmpty()) return;
+
+        String[] parts = line.split(" ");
+        int idx = (parts.length > 0 && parts[0].startsWith(":")) ? 1 : 0;
+        if (parts.length <= idx) return;
+
+        String code = parts[idx];
+        if (code.equals(RPL_LIST)) {
+            if (parts.length <= idx + 3) return;
+            String channel = parts[idx + 2];
+            if (channel == null || channel.isEmpty()) return;
+
+            int userCount;
+            try { userCount = Integer.parseInt(parts[idx + 3]); }
+            catch (NumberFormatException e) { userCount = 0; }
+
+            String topic = "";
+            int chanPos = line.indexOf(channel);
+            int topicIdx = chanPos >= 0 ? line.indexOf(" :", chanPos) : -1;
+            if (topicIdx >= 0) topic = line.substring(topicIdx + 2);
+
+            int seen = listEntryCount.merge(serverName, 1, Integer::sum);
+            if (seen > MAX_LIST_ENTRIES_PER_REQUEST) return;
+
+            final String ch    = channel;
+            final int    uc    = userCount;
+            final String tp    = topic;
+            Listener l = listener;
+            if (l != null) mainHandler.post(() -> l.onChannelListEntry(serverName, ch, uc, tp));
+
+        } else if (code.equals(RPL_LISTEND)) {
+            listEntryCount.remove(serverName);
+            Listener l = listener;
+            if (l != null) mainHandler.post(() -> l.onChannelListComplete(serverName));
         }
     }
 
@@ -735,6 +784,7 @@ public class IrcService extends Service {
         lastPersistedMs.keySet().removeIf(k -> k.startsWith(prefix));
         backfillContinuationCount.keySet().removeIf(k -> k.startsWith(prefix));
         chathistoryFailRetryCount.keySet().removeIf(k -> k.startsWith(prefix));
+        listEntryCount.remove(serverName);
         purgePersistedWatermarksFor(serverName);
     }
 
@@ -746,6 +796,7 @@ public class IrcService extends Service {
         lastHistoryRequestMs.clear();
         pendingHistoryRequest.clear();
         recentMessageFingerprints.clear();
+        listEntryCount.clear();
         refreshNotification();
     }
 
@@ -773,6 +824,22 @@ public class IrcService extends Service {
         return true;
     }
 
+    public boolean sendRaw(String serverName, String rawLine) {
+        ServerState st = states.get(serverName);
+        if (st == null || !st.connected.get() || st.bot == null) return false;
+        if (rawLine == null) return false;
+
+        final String sanitized = stripIrcInjection(rawLine).trim();
+        if (sanitized.isEmpty()) return false;
+
+        final String safe = truncateToByteLimit(sanitized, MAX_OUTBOUND_MSG_BYTES);
+        safeExecute(workerExecutor, "sendRaw", () -> {
+            try { st.bot.sendRaw().rawLine(safe); }
+            catch (Exception e) { Log.e(TAG, "sendRaw error [" + serverName + "]", e); }
+        });
+        return true;
+    }
+
     private final Map<String, Long> lastHistoryRequestMs =
             new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Boolean> pendingHistoryRequest =
@@ -783,6 +850,30 @@ public class IrcService extends Service {
 
     private final Map<String, Integer> chathistoryFailRetryCount =
             new java.util.concurrent.ConcurrentHashMap<>();
+
+    private final Map<String, Integer> listEntryCount =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    public boolean requestChannelList(String serverName) {
+        ServerState st = states.get(serverName);
+        if (st == null || !st.connected.get() || st.bot == null) return false;
+
+        listEntryCount.remove(serverName);
+
+        Listener l = listener;
+        if (l != null) mainHandler.post(() -> l.onChannelListStarted(serverName));
+
+        safeExecute(workerExecutor, "requestChannelList[" + serverName + "]", () -> {
+            PircBotX bot = st.bot;
+            if (bot == null || !st.connected.get()) return;
+            try {
+                bot.sendRaw().rawLine("LIST");
+            } catch (Exception e) {
+                Log.w(TAG, "requestChannelList error [" + serverName + "]", e);
+            }
+        });
+        return true;
+    }
 
     private void backfillKnownDmTargets(String serverName) {
         ServerState st = states.get(serverName);

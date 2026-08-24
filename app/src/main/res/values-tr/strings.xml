@@ -151,4 +151,15 @@ Oturum parmak izi (bant dışı doğrulayın):
         <item quantity="one">Şifreli mesaj</item>
         <item quantity="other">%d yeni şifreli mesaj</item>
     </plurals>
+    <string name="discover_channels">Kanalları keşfet</string>
+    <string name="search_channels_hint">Kanal ara</string>
+    <string name="no_channels_found">Kanal bulunamadı</string>
+    <string name="channels_loading">Yükleniyor…</string>
+    <string name="channels_found">%d kanal</string>
+    <string name="join">Katıl</string>
+
+    <plurals name="channel_discovery_users">
+        <item quantity="one">%d kullanıcı</item>
+        <item quantity="other">%d kullanıcı</item>
+    </plurals>
 </resources>
