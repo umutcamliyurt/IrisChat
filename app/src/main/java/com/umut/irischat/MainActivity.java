@@ -50,6 +50,13 @@ public class MainActivity extends AppCompatActivity {
     static final String KEY_DM_ADVERTISEMENT = "dm_advertisement_enabled";
 
     private static final int MAX_MSG_LENGTH = 400;
+    private static final long CONNECTION_FAILED_TOAST_DURATION_MS = 10_000L;
+    private static final long CONNECTION_FAILED_TOAST_REFRESH_MS  = 3_000L;
+
+    private android.widget.Toast connectionErrorToast;
+    private final android.os.Handler connectionErrorToastHandler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable connectionErrorToastRunnable;
 
     private final Map<String, List<Long>> chatRowIds = new LinkedHashMap<>();
 
@@ -170,6 +177,9 @@ public class MainActivity extends AppCompatActivity {
                 @Override public void onDisconnected(String serverName) {
                     runOnUiThread(() -> refreshStatusBar());
                 }
+                @Override public void onConnectionFailed(String serverName) {
+                    runOnUiThread(() -> showConnectionFailedToast(serverName));
+                }
                 @Override public void onMessage(String serverName, String channel,
                                                 String nick, String text, String imageUrl) {
                     String key = tabKey(serverName, channel);
@@ -214,7 +224,16 @@ public class MainActivity extends AppCompatActivity {
                     if (isDmTab(key)) runOnUiThread(() -> refreshTabLabel(key));
                 }
                 @Override public void onNotice(String serverName, String fromNick, String text) {
-                    if (!SignalStore.isKeyAnnouncement(text)) return;
+                    if (!SignalStore.isKeyAnnouncement(text)) {
+                        String key = currentTabKeyForServer(serverName);
+                        String display = "-" + fromNick + "- " + text;
+                        if (key != null) {
+                            appendToTab(key, new ChatMessage(null, display, ChatMessage.Type.SYSTEM));
+                        } else {
+                            runOnUiThread(() -> Toast.makeText(MainActivity.this, display, Toast.LENGTH_LONG).show());
+                        }
+                        return;
+                    }
                     if (!isValidNick(fromNick)) {
                         android.util.Log.w("MainActivity",
                                 "onNotice: ignoring key announcement from invalid nick");
@@ -303,6 +322,17 @@ public class MainActivity extends AppCompatActivity {
                 @Override public void onChannelListComplete(String serverName) {
                     ChannelDiscoverySheet sheet = currentDiscoverySheet(serverName);
                     if (sheet != null) sheet.onListComplete();
+                }
+
+                @Override public void onServerText(String serverName, String text) {
+                    runOnUiThread(() -> {
+                        String key = currentTabKeyForServer(serverName);
+                        if (key != null) {
+                            appendToTab(key, new ChatMessage(null, text, ChatMessage.Type.SYSTEM));
+                        } else {
+                            Toast.makeText(MainActivity.this, text, Toast.LENGTH_LONG).show();
+                        }
+                    });
                 }
             });
 
@@ -510,6 +540,42 @@ public class MainActivity extends AppCompatActivity {
             serviceBound = false;
         }
         if (msgDb != null) msgDb.lock();
+        cancelConnectionFailedToast();
+    }
+
+    private void showConnectionFailedToast(String serverName) {
+        cancelConnectionFailedToast();
+
+        String text = getString(R.string.server_not_connected, serverName);
+        connectionErrorToast = android.widget.Toast.makeText(
+                this, text, android.widget.Toast.LENGTH_LONG);
+        connectionErrorToast.show();
+
+        long endAtMs = android.os.SystemClock.uptimeMillis() + CONNECTION_FAILED_TOAST_DURATION_MS;
+        connectionErrorToastRunnable = new Runnable() {
+            @Override public void run() {
+                if (connectionErrorToast == null
+                        || android.os.SystemClock.uptimeMillis() >= endAtMs) {
+                    cancelConnectionFailedToast();
+                    return;
+                }
+                connectionErrorToast.show();
+                connectionErrorToastHandler.postDelayed(this, CONNECTION_FAILED_TOAST_REFRESH_MS);
+            }
+        };
+        connectionErrorToastHandler.postDelayed(
+                connectionErrorToastRunnable, CONNECTION_FAILED_TOAST_REFRESH_MS);
+    }
+
+    private void cancelConnectionFailedToast() {
+        if (connectionErrorToastRunnable != null) {
+            connectionErrorToastHandler.removeCallbacks(connectionErrorToastRunnable);
+            connectionErrorToastRunnable = null;
+        }
+        if (connectionErrorToast != null) {
+            connectionErrorToast.cancel();
+            connectionErrorToast = null;
+        }
     }
 
     static String tabKey(String serverName, String channel) {
@@ -587,6 +653,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     void joinDiscoveredChannel(String serverName, String channel) {
+        joinDiscoveredChannel(serverName, channel, null);
+    }
+
+    void joinDiscoveredChannel(String serverName, String channel, String channelKey) {
         if (!serviceBound || ircService == null || !ircService.isConnected(serverName)) {
             Toast.makeText(this, getString(R.string.server_not_connected, serverName), Toast.LENGTH_SHORT).show();
             return;
@@ -596,7 +666,9 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        boolean sent = ircService.sendRaw(serverName, "JOIN " + channel);
+        String rawLine = (channelKey != null && !channelKey.isEmpty())
+                ? "JOIN " + channel + " " + channelKey : "JOIN " + channel;
+        boolean sent = ircService.sendRaw(serverName, rawLine);
         if (!sent) {
             Toast.makeText(this, getString(R.string.send_failed), Toast.LENGTH_SHORT).show();
             return;
@@ -1210,15 +1282,10 @@ public class MainActivity extends AppCompatActivity {
         String message = chatInput.getText().toString().trim();
         if (message.isEmpty()) return;
 
-        if (message.startsWith("/msg ")) {
-            handleSlashMsg(message.substring(5).trim());
-            chatInput.setText("");
-            return;
-        }
-
-        if (message.startsWith("/raw ")) {
-            String args = message.substring(5).trim();
-            handleSlashRaw(args);
+        if (message.startsWith("//")) {
+            message = message.substring(1);
+        } else if (message.startsWith("/")) {
+            handleSlashCommand(message.substring(1).trim());
             chatInput.setText("");
             return;
         }
@@ -1360,6 +1427,392 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void handleSlashCommand(String body) {
+        if (body.isEmpty()) return;
+
+        int space = body.indexOf(' ');
+        String cmd  = (space >= 0 ? body.substring(0, space) : body).toLowerCase(java.util.Locale.ROOT);
+        String args = space >= 0 ? body.substring(space + 1).trim() : "";
+
+        switch (cmd) {
+            case "msg":
+            case "query":
+                handleSlashMsg(args);
+                return;
+            case "raw":
+            case "quote":
+                handleSlashRaw(args);
+                return;
+            case "join":
+            case "j":
+                handleSlashJoin(args);
+                return;
+            case "part":
+            case "leave":
+                handleSlashPart(args);
+                return;
+            case "nick":
+                handleSlashNick(args);
+                return;
+            case "me":
+            case "action":
+                handleSlashMe(args);
+                return;
+            case "topic":
+                handleSlashTopic(args);
+                return;
+            case "notice":
+                handleSlashNotice(args);
+                return;
+            case "whois":
+                handleSlashWhois(args);
+                return;
+            case "kick":
+                handleSlashKick(args);
+                return;
+            case "invite":
+                handleSlashInvite(args);
+                return;
+            case "away":
+                handleSlashAway(args);
+                return;
+            case "quit":
+            case "disconnect":
+                handleSlashQuit(args);
+                return;
+            case "help":
+            case "commands":
+                showSlashCommandHelp();
+                return;
+            default:
+                handleSlashRaw(cmd.toUpperCase(java.util.Locale.ROOT) + (args.isEmpty() ? "" : " " + args));
+        }
+    }
+
+    private String[] currentTabTarget() {
+        int cur = viewPager.getCurrentItem();
+        if (cur < 0 || cur >= tabKeys.size()) return null;
+        String key = tabKeys.get(cur);
+        int slash = key.indexOf('/');
+        if (slash < 0) return null;
+        return new String[]{ key.substring(0, slash), key.substring(slash + 1), key };
+    }
+
+    private static boolean isChannelName(String target) {
+        return target != null && (target.startsWith("#") || target.startsWith("&"));
+    }
+
+    private void handleSlashJoin(String args) {
+        if (args.isEmpty()) {
+            Toast.makeText(this, "Usage: /join #channel [key]", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String serverName = currentServerName();
+        if (serverName == null) {
+            Toast.makeText(this, getString(R.string.no_connected_server), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String[] parts = args.split("\\s+", 2);
+        String channel = parts[0];
+        if (!channel.startsWith("#") && !channel.startsWith("&")) channel = "#" + channel;
+        String key = parts.length > 1 ? parts[1] : null;
+
+        joinDiscoveredChannel(serverName, channel, key);
+    }
+
+    private void handleSlashPart(String args) {
+        String serverName;
+        String channel;
+        String reason;
+
+        String trimmed = args.trim();
+        if (isChannelName(trimmed.split("\\s+", 2)[0])) {
+            String[] parts = trimmed.split("\\s+", 2);
+            serverName = currentServerName();
+            channel    = parts[0];
+            reason     = parts.length > 1 ? parts[1] : null;
+        } else {
+            String[] cur = currentTabTarget();
+            if (cur == null || !isChannelName(cur[1])) {
+                Toast.makeText(this, "Usage: /part [#channel] [reason]", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            serverName = cur[0];
+            channel    = cur[1];
+            reason     = trimmed.isEmpty() ? null : trimmed;
+        }
+
+        if (serverName == null) {
+            Toast.makeText(this, getString(R.string.no_connected_server), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!serviceBound || ircService == null || !ircService.isConnected(serverName)) {
+            Toast.makeText(this, getString(R.string.server_not_connected, serverName), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String rawLine = reason != null ? "PART " + channel + " :" + reason : "PART " + channel;
+        boolean sent = ircService.sendRaw(serverName, rawLine);
+        if (!sent) {
+            Toast.makeText(this, getString(R.string.send_failed), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Server srv = knownServers.get(serverName);
+        if (srv != null && srv.getChannels().contains(channel)) {
+            List<String> updated = new ArrayList<>(srv.getChannels());
+            updated.remove(channel);
+            srv.setChannels(updated);
+        }
+        scheduleSave();
+
+        closeDmTab(tabKey(serverName, channel));
+    }
+
+    private void handleSlashNick(String args) {
+        String newNick = args.trim().split("\\s+")[0];
+        if (newNick.isEmpty() || !isValidNick(newNick)) {
+            Toast.makeText(this, getString(R.string.invalid_nickname), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String serverName = currentServerName();
+        if (serverName == null) {
+            Toast.makeText(this, getString(R.string.no_connected_server), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!serviceBound || ircService == null || !ircService.isConnected(serverName)) {
+            Toast.makeText(this, getString(R.string.server_not_connected, serverName), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        boolean sent = ircService.sendRaw(serverName, "NICK " + newNick);
+        if (!sent) {
+            Toast.makeText(this, getString(R.string.send_failed), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Server srv = knownServers.get(serverName);
+        if (srv != null) {
+            srv.setNickname(newNick);
+            scheduleSave();
+        }
+    }
+
+    private void handleSlashMe(String args) {
+        if (args.isEmpty()) return;
+        String[] cur = currentTabTarget();
+        if (cur == null) return;
+        String serverName = cur[0];
+        String target      = cur[1];
+        String key          = cur[2];
+
+        if (!serviceBound || ircService == null || !ircService.isConnected(serverName)) {
+            Toast.makeText(this, getString(R.string.server_not_connected, serverName), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (args.length() > MAX_MSG_LENGTH) {
+            Toast.makeText(this,
+                    getString(R.string.message_too_long, args.length(), MAX_MSG_LENGTH),
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        boolean sent = ircService.sendAction(serverName, target, args);
+        if (!sent) {
+            Toast.makeText(this, getString(R.string.send_failed), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Server srv = knownServers.get(serverName);
+        String myNick = srv != null ? srv.getNickname() : "me";
+        ChatMessage msg = new ChatMessage(null, "* " + myNick + " " + args, ChatMessage.Type.SENT);
+        appendToTab(key, msg);
+    }
+
+    private void handleSlashTopic(String args) {
+        String[] cur = currentTabTarget();
+        if (cur == null || !isChannelName(cur[1])) {
+            Toast.makeText(this, "Usage: /topic [new topic]", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String serverName = cur[0];
+        String channel     = cur[1];
+
+        if (!serviceBound || ircService == null || !ircService.isConnected(serverName)) {
+            Toast.makeText(this, getString(R.string.server_not_connected, serverName), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String rawLine = args.isEmpty() ? "TOPIC " + channel : "TOPIC " + channel + " :" + args;
+        boolean sent = ircService.sendRaw(serverName, rawLine);
+        if (!sent) {
+            Toast.makeText(this, getString(R.string.send_failed), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void handleSlashNotice(String args) {
+        int space = args.indexOf(' ');
+        if (space < 0 || space == args.length() - 1) {
+            Toast.makeText(this, "Usage: /notice <nick> <message>", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String target = args.substring(0, space);
+        String text   = args.substring(space + 1).trim();
+        if (target.isEmpty() || text.isEmpty()) return;
+
+        String serverName = currentServerName();
+        if (serverName == null) {
+            Toast.makeText(this, getString(R.string.no_connected_server), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!serviceBound || ircService == null || !ircService.isConnected(serverName)) {
+            Toast.makeText(this, getString(R.string.server_not_connected, serverName), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        boolean sent = ircService.sendNotice(serverName, target, text);
+        if (!sent) {
+            Toast.makeText(this, getString(R.string.send_failed), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void handleSlashWhois(String args) {
+        String nick = args.trim().split("\\s+")[0];
+        if (nick.isEmpty()) {
+            Toast.makeText(this, "Usage: /whois <nick>", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String serverName = currentServerName();
+        if (serverName == null) {
+            Toast.makeText(this, getString(R.string.no_connected_server), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!serviceBound || ircService == null || !ircService.isConnected(serverName)) {
+            Toast.makeText(this, getString(R.string.server_not_connected, serverName), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        boolean sent = ircService.sendRaw(serverName, "WHOIS " + nick);
+        if (!sent) {
+            Toast.makeText(this, getString(R.string.send_failed), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void handleSlashKick(String args) {
+        String[] cur = currentTabTarget();
+        String trimmed = args.trim();
+        if (cur == null || !isChannelName(cur[1]) || trimmed.isEmpty()) {
+            Toast.makeText(this, "Usage: /kick <nick> [reason]", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String serverName = cur[0];
+        String channel     = cur[1];
+        String[] parts = trimmed.split("\\s+", 2);
+        String nick    = parts[0];
+        String reason  = parts.length > 1 ? parts[1] : null;
+
+        if (!serviceBound || ircService == null || !ircService.isConnected(serverName)) {
+            Toast.makeText(this, getString(R.string.server_not_connected, serverName), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String rawLine = reason != null
+                ? "KICK " + channel + " " + nick + " :" + reason
+                : "KICK " + channel + " " + nick;
+        boolean sent = ircService.sendRaw(serverName, rawLine);
+        if (!sent) {
+            Toast.makeText(this, getString(R.string.send_failed), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void handleSlashInvite(String args) {
+        String trimmed = args.trim();
+        String[] parts = trimmed.isEmpty() ? new String[0] : trimmed.split("\\s+");
+        if (parts.length == 0) {
+            Toast.makeText(this, "Usage: /invite <nick> [#channel]", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String nick = parts[0];
+        String[] cur = currentTabTarget();
+        String channel = parts.length > 1 ? parts[1]
+                : (cur != null && isChannelName(cur[1]) ? cur[1] : null);
+        if (channel == null) {
+            Toast.makeText(this, "Usage: /invite <nick> <#channel>", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String serverName = currentServerName();
+        if (serverName == null) {
+            Toast.makeText(this, getString(R.string.no_connected_server), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!serviceBound || ircService == null || !ircService.isConnected(serverName)) {
+            Toast.makeText(this, getString(R.string.server_not_connected, serverName), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        boolean sent = ircService.sendRaw(serverName, "INVITE " + nick + " " + channel);
+        if (!sent) {
+            Toast.makeText(this, getString(R.string.send_failed), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void handleSlashAway(String args) {
+        String serverName = currentServerName();
+        if (serverName == null) {
+            Toast.makeText(this, getString(R.string.no_connected_server), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!serviceBound || ircService == null || !ircService.isConnected(serverName)) {
+            Toast.makeText(this, getString(R.string.server_not_connected, serverName), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String rawLine = args.isEmpty() ? "AWAY" : "AWAY :" + args;
+        boolean sent = ircService.sendRaw(serverName, rawLine);
+        if (!sent) {
+            Toast.makeText(this, getString(R.string.send_failed), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void handleSlashQuit(String args) {
+        String serverName = currentServerName();
+        if (serverName == null) {
+            Toast.makeText(this, getString(R.string.no_connected_server), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (serviceBound && ircService != null && ircService.isConnected(serverName)) {
+            String rawLine = args.isEmpty() ? "QUIT" : "QUIT :" + args;
+            ircService.sendRaw(serverName, rawLine);
+            ircService.disconnectServer(serverName);
+            refreshStatusBar();
+        }
+    }
+
+    private void showSlashCommandHelp() {
+        String help =
+                "/join #channel [key]\n" +
+                        "/part [#channel] [reason]\n" +
+                        "/msg <nick> [message]  (alias: /query)\n" +
+                        "/me <action>\n" +
+                        "/nick <newnick>\n" +
+                        "/topic [text]\n" +
+                        "/notice <nick> <message>\n" +
+                        "/whois <nick>\n" +
+                        "/kick <nick> [reason]\n" +
+                        "/invite <nick> [#channel]\n" +
+                        "/away [message]\n" +
+                        "/quit [message]  (alias: /disconnect)\n" +
+                        "/raw <IRC command>  (alias: /quote)\n\n" +
+                        "Any other /command is sent to the server as-is.\n" +
+                        "Start a message with // to send a literal message beginning with a slash.";
+        new androidx.appcompat.app.AlertDialog.Builder(this, R.style.IrisDialog)
+                .setTitle("Available commands")
+                .setMessage(help)
+                .setPositiveButton(android.R.string.ok, null)
+                .show();
+    }
+
     private String currentServerName() {
         int cur = viewPager.getCurrentItem();
         if (cur < tabKeys.size()) {
@@ -1370,6 +1823,27 @@ public class MainActivity extends AppCompatActivity {
         List<Server> connected = ircService != null ? ircService.getConnectedServers()
                 : new ArrayList<>();
         return connected.isEmpty() ? null : connected.get(0).getName();
+    }
+
+    private String currentTabKeyForServer(String serverName) {
+        if (serverName == null) return null;
+        int cur = viewPager.getCurrentItem();
+        synchronized (stateLock) {
+            if (cur >= 0 && cur < tabKeys.size()) {
+                String key = tabKeys.get(cur);
+                int slash = key.indexOf('/');
+                if (slash >= 0 && key.substring(0, slash).equals(serverName)) {
+                    return key;
+                }
+            }
+            for (String key : tabKeys) {
+                int slash = key.indexOf('/');
+                if (slash >= 0 && key.substring(0, slash).equals(serverName)) {
+                    return key;
+                }
+            }
+        }
+        return null;
     }
 
     void openDmTab(String serverName, String nick) {

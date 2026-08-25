@@ -72,12 +72,21 @@
             android:textSize="14sp"
             android:layout_marginBottom="10dp" />
 
-        <LinearLayout
-            android:id="@+id/colorSwatchRow"
+        <HorizontalScrollView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="start" />
+            android:scrollbars="none"
+            android:overScrollMode="ifContentScrolls"
+            android:clipToPadding="false">
+
+            <LinearLayout
+                android:id="@+id/colorSwatchRow"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="start" />
+
+        </HorizontalScrollView>
 
     </LinearLayout>
 

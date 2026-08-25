@@ -19,16 +19,31 @@ public class ThemeHelper {
     private static final String PLAIN_PREFS = "theme_prefs";
 
     static final String[] ACCENT_LABELS = {
-            "Blue", "Purple", "Pink", "Red", "Orange", "Green", "Teal"
+            "Blue", "Indigo", "Purple", "Violet", "Pink", "Magenta", "Red",
+            "Crimson", "Orange", "Amber", "Yellow", "Lime", "Green", "Emerald",
+            "Teal", "Cyan", "Sky", "Slate", "Brown", "Graphite"
     };
     static final int[] ACCENT_COLORS = {
-            0xFF3A76F0,
-            0xFF8A56E8,
-            0xFFE040FB,
-            0xFFE53935,
-            0xFFF57C00,
-            0xFF2E7D32,
-            0xFF00897B,
+            0xFF3A76F0, // Blue
+            0xFF5C6BC0, // Indigo
+            0xFF8A56E8, // Purple
+            0xFF9C27B0, // Violet
+            0xFFE040FB, // Pink
+            0xFFD81B60, // Magenta
+            0xFFE53935, // Red
+            0xFFB71C1C, // Crimson
+            0xFFF57C00, // Orange
+            0xFFFFA000, // Amber
+            0xFFF9A825, // Yellow
+            0xFF9E9D24, // Lime
+            0xFF2E7D32, // Green
+            0xFF00A86B, // Emerald
+            0xFF00897B, // Teal
+            0xFF00ACC1, // Cyan
+            0xFF0288D1, // Sky
+            0xFF546E7A, // Slate
+            0xFF6D4C41, // Brown
+            0xFF455A64, // Graphite
     };
 
     static volatile int currentAccent = ACCENT_COLORS[0];

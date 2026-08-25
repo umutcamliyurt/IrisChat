@@ -103,11 +103,14 @@ public class IrcService extends Service {
     public interface Listener {
         void onConnected(String serverName);
         void onDisconnected(String serverName);
+        default void onConnectionFailed(String serverName) {}
         void onMessage(String serverName, String channel, String nick,
                        String text, String imageUrl);
         void onNotice(String serverName, String fromNick, String text);
         default void onMembersChanged(String serverName, String channel,
                                       List<String> sortedNicks) {}
+
+        default void onServerText(String serverName, String text) {}
 
         default void onChannelListStarted(String serverName) {}
         default void onChannelListEntry(String serverName, String channel,
@@ -241,6 +244,7 @@ public class IrcService extends Service {
             handleBatchControlLine(serverName, state, rawLine);
             handleChathistoryFailLine(serverName, state, rawLine);
             handleChannelListLine(serverName, rawLine);
+            handleGenericServerReply(serverName, rawLine);
 
             super.handleLine(rawLine);
         }
@@ -385,6 +389,115 @@ public class IrcService extends Service {
             listEntryCount.remove(serverName);
             Listener l = listener;
             if (l != null) mainHandler.post(() -> l.onChannelListComplete(serverName));
+        }
+    }
+
+    private static final java.util.Set<String> INTERESTING_NUMERICS = new java.util.HashSet<>(
+            java.util.Arrays.asList(
+                    "301", "305", "306",
+                    "311", "312", "313", "317", "318", "319", "330", "338",
+                    "331", "332", "333",
+                    "401", "403", "404", "405", "406", "421", "432", "433", "436",
+                    "441", "442", "443", "461", "467", "471", "473", "474", "475",
+                    "476", "477", "478", "482"
+            ));
+
+    private void handleGenericServerReply(String serverName, String rawLine) {
+        String line = stripTags(rawLine);
+        if (line == null || line.isEmpty()) return;
+
+        String[] parts = line.split(" ");
+        int idx = (parts.length > 0 && parts[0].startsWith(":")) ? 1 : 0;
+        if (parts.length <= idx + 1) return;
+
+        String code = parts[idx];
+        if (!INTERESTING_NUMERICS.contains(code)) return;
+
+        String text = formatNumericReply(code, line, parts, idx + 1);
+        if (text == null || text.isEmpty()) return;
+
+        Listener l = listener;
+        if (l != null) mainHandler.post(() -> l.onServerText(serverName, text));
+    }
+
+    private static String formatNumericReply(String code, String line, String[] parts, int paramsStart) {
+        int p = paramsStart < parts.length ? paramsStart + 1 : paramsStart;
+
+        String trailing = null;
+        int colonIdx = line.indexOf(" :");
+        if (colonIdx >= 0) trailing = line.substring(colonIdx + 2);
+
+        List<String> middle = new ArrayList<>();
+        for (int i = p; i < parts.length; i++) {
+            if (parts[i].startsWith(":")) break;
+            middle.add(parts[i]);
+        }
+
+        switch (code) {
+            case "311": {
+                if (middle.size() < 3) return null;
+                String nick = middle.get(0), user = middle.get(1), host = middle.get(2);
+                return nick + " is " + user + "@" + host
+                        + (trailing != null && !trailing.isEmpty() ? " (" + trailing + ")" : "");
+            }
+            case "312": {
+                if (middle.isEmpty()) return null;
+                String nick = middle.get(0);
+                String srv  = middle.size() > 1 ? middle.get(1) : "";
+                return nick + " is connected via " + srv
+                        + (trailing != null && !trailing.isEmpty() ? " (" + trailing + ")" : "");
+            }
+            case "313": {
+                String nick = middle.isEmpty() ? "" : middle.get(0);
+                return (nick + " " + (trailing != null ? trailing : "is an IRC operator")).trim();
+            }
+            case "317": {
+                if (middle.size() < 2) return null;
+                String nick = middle.get(0);
+                long idleSecs;
+                try { idleSecs = Long.parseLong(middle.get(1)); }
+                catch (NumberFormatException e) { return null; }
+                return nick + " has been idle for " + idleSecs + "s";
+            }
+            case "318": {
+                String nick = middle.isEmpty() ? "" : middle.get(0);
+                return "End of WHOIS for " + nick;
+            }
+            case "319": {
+                String nick = middle.isEmpty() ? "" : middle.get(0);
+                return nick + " is on: " + (trailing != null ? trailing : "");
+            }
+            case "330": {
+                String nick = middle.isEmpty() ? "" : middle.get(0);
+                String account = middle.size() > 1 ? middle.get(1) : "";
+                return nick + " is logged in as " + account;
+            }
+            case "301": {
+                String nick = middle.isEmpty() ? "" : middle.get(0);
+                return nick + " is away" + (trailing != null && !trailing.isEmpty() ? ": " + trailing : "");
+            }
+            case "305":
+            case "306":
+                return trailing;
+            case "331": {
+                String channel = middle.isEmpty() ? "" : middle.get(0);
+                return "No topic set for " + channel;
+            }
+            case "332": {
+                String channel = middle.isEmpty() ? "" : middle.get(0);
+                return "Topic for " + channel + ": " + (trailing != null ? trailing : "");
+            }
+            case "333": {
+                if (middle.size() < 2) return null;
+                String channel = middle.get(0);
+                String setBy   = middle.get(1);
+                return "Topic for " + channel + " set by " + setBy;
+            }
+            default: {
+                String context = String.join(" ", middle);
+                if (trailing == null || trailing.isEmpty()) return context.isEmpty() ? null : context;
+                return context.isEmpty() ? trailing : context + ": " + trailing;
+            }
         }
     }
 
@@ -824,6 +937,19 @@ public class IrcService extends Service {
         return true;
     }
 
+    public boolean sendAction(String serverName, String target, String action) {
+        ServerState st = states.get(serverName);
+        if (st == null || !st.connected.get() || st.bot == null) return false;
+        if (target == null || target.isEmpty()) return false;
+        final String sanitized = stripIrcInjection(action);
+        final String safe = truncateToByteLimit(sanitized, MAX_OUTBOUND_MSG_BYTES);
+        safeExecute(workerExecutor, "sendAction", () -> {
+            try { st.bot.send().action(target, safe); }
+            catch (Exception e) { Log.e(TAG, "sendAction error [" + serverName + "]", e); }
+        });
+        return true;
+    }
+
     public boolean sendRaw(String serverName, String rawLine) {
         ServerState st = states.get(serverName);
         if (st == null || !st.connected.get() || st.bot == null) return false;
@@ -1094,6 +1220,7 @@ public class IrcService extends Service {
                                 } else {
                                     long delay = nextDelay(st.retryCount.getAndIncrement());
                                     Log.i(TAG, "Reconnect " + name + " in " + delay + " ms");
+                                    if (l != null) mainHandler.post(() -> l.onConnectionFailed(name));
                                     scheduleReconnect(st, delay);
                                 }
                             }
@@ -1320,6 +1447,7 @@ public class IrcService extends Service {
                     if (l != null) mainHandler.post(() -> l.onDisconnected(name));
                     if (st.shouldRun.get()) {
                         long delay = nextDelay(st.retryCount.getAndIncrement());
+                        if (l != null) mainHandler.post(() -> l.onConnectionFailed(name));
                         scheduleReconnect(st, delay);
                     }
                 }
@@ -1331,7 +1459,10 @@ public class IrcService extends Service {
             refreshNotification();
             Listener l = listener;
             if (l != null) mainHandler.post(() -> l.onDisconnected(name));
-            if (st.shouldRun.get()) scheduleReconnect(st, nextDelay(st.retryCount.getAndIncrement()));
+            if (st.shouldRun.get()) {
+                if (l != null) mainHandler.post(() -> l.onConnectionFailed(name));
+                scheduleReconnect(st, nextDelay(st.retryCount.getAndIncrement()));
+            }
         }
     }
 
