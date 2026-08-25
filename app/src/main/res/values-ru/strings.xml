@@ -165,4 +165,6 @@
         <item quantity="many">%d пользователей</item>
         <item quantity="other">%d пользователя</item>
     </plurals>
+    <string name="server_focus_enabled">Фокус на %1$s</string>
+    <string name="server_focus_cleared">Показаны вкладки всех серверов</string>
 </resources>

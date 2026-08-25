@@ -162,4 +162,6 @@ Oturum parmak izi (bant dışı doğrulayın):
         <item quantity="one">%d kullanıcı</item>
         <item quantity="other">%d kullanıcı</item>
     </plurals>
+    <string name="server_focus_enabled">%1$s sunucusuna odaklanıldı</string>
+    <string name="server_focus_cleared">Tüm sunucuların sekmeleri gösteriliyor</string>
 </resources>

@@ -5,7 +5,9 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.view.GestureDetector;
 import android.view.LayoutInflater;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
@@ -106,7 +108,7 @@ public class MainActivity extends AppCompatActivity {
         return nick != null && VALID_NICK.matcher(nick).matches();
     }
 
-    private TextView    serverLabel, statusLabel;
+    private TextView    statusLabel;
     private ImageButton addServerButton;
     ImageButton sendButton;
     private ImageButton membersButton;
@@ -114,6 +116,10 @@ public class MainActivity extends AppCompatActivity {
     private EditText    chatInput;
     TabLayout   tabLayout;
     private ViewPager2  viewPager;
+
+    private String focusedServerName = null;
+    private android.widget.LinearLayout serverLabelRow;
+    private int defaultServerLabelColor;
     private View        replyPreviewBar;
     TextView    replyPreviewNick, replyPreviewText;
     private View        replyCancelBtn;
@@ -398,8 +404,9 @@ public class MainActivity extends AppCompatActivity {
 
         setContentView(R.layout.activity_main);
 
-        serverLabel     = findViewById(R.id.serverLabel);
+        serverLabelRow  = findViewById(R.id.serverLabelRow);
         statusLabel     = findViewById(R.id.statusLabel);
+        defaultServerLabelColor = androidx.core.content.ContextCompat.getColor(this, R.color.text_primary);
         addServerButton = findViewById(R.id.switchServerButton);
         sendButton      = findViewById(R.id.sendButton);
         membersButton   = findViewById(R.id.membersButton);
@@ -454,7 +461,7 @@ public class MainActivity extends AppCompatActivity {
         pagerAdapter = new ChannelPagerAdapter(this);
         viewPager.setAdapter(pagerAdapter);
         new TabLayoutMediator(tabLayout, viewPager,
-                (tab, pos) -> applyTabLabel(tab, tabKeys.get(pos))
+                (tab, pos) -> applyTabLabel(tab, visibleTabKeys().get(pos))
         ).attach();
 
         tabLayout.addOnTabSelectedListener(new com.google.android.material.tabs.TabLayout.OnTabSelectedListener() {
@@ -528,7 +535,10 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (crypto != null) ThemeHelper.apply(this, crypto);
+        if (crypto != null) {
+            ThemeHelper.apply(this, crypto);
+            if (focusedServerName != null && serverLabelRow != null) refreshServerLabel();
+        }
     }
 
     @Override
@@ -591,9 +601,15 @@ public class MainActivity extends AppCompatActivity {
         return !target.startsWith("#") && !target.startsWith("&");
     }
 
-    private void updateMembersButtonVisibility() {
+    private String currentTabKey() {
+        List<String> visible = visibleTabKeys();
         int cur = viewPager.getCurrentItem();
-        boolean show = cur < tabKeys.size() && !isDmTab(tabKeys.get(cur));
+        return (cur >= 0 && cur < visible.size()) ? visible.get(cur) : null;
+    }
+
+    private void updateMembersButtonVisibility() {
+        String key = currentTabKey();
+        boolean show = key != null && !isDmTab(key);
         membersButton.setVisibility(show ? View.VISIBLE : View.GONE);
     }
 
@@ -605,10 +621,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showMembersSheet() {
-        int cur = viewPager.getCurrentItem();
-        if (cur >= tabKeys.size()) return;
-        String key = tabKeys.get(cur);
-        if (isDmTab(key)) return;
+        String key = currentTabKey();
+        if (key == null || isDmTab(key)) return;
 
         int slash = key.indexOf('/');
         String serverName = key.substring(0, slash);
@@ -696,7 +710,7 @@ public class MainActivity extends AppCompatActivity {
             scheduleSave();
         }
 
-        int idx = tabKeys.indexOf(key);
+        int idx = visibleTabKeys().indexOf(key);
         if (idx >= 0) viewPager.setCurrentItem(idx, true);
     }
 
@@ -1199,7 +1213,7 @@ public class MainActivity extends AppCompatActivity {
         }
         if (tabsAdded) pagerAdapter.notifyDataSetChanged();
 
-        serverLabel.setText(buildServerLabelText());
+        refreshServerLabel();
         refreshStatusBar();
         scheduleSave();
 
@@ -1208,6 +1222,10 @@ public class MainActivity extends AppCompatActivity {
 
     private void removeServer(String name) {
         if (!knownServers.containsKey(name)) return;
+
+        if (name.equals(focusedServerName)) {
+            focusedServerName = null;
+        }
 
         if (serviceBound && ircService != null) ircService.disconnectServer(name);
 
@@ -1237,16 +1255,118 @@ public class MainActivity extends AppCompatActivity {
         }
 
         pagerAdapter.notifyDataSetChanged();
-        serverLabel.setText(buildServerLabelText());
+        refreshServerLabel();
         refreshStatusBar();
         scheduleSave();
     }
 
 
+    private void refreshServerLabel() {
+        serverLabelRow.removeAllViews();
 
-    private String buildServerLabelText() {
-        if (knownServers.isEmpty()) return getString(R.string.app_name);
-        return String.join(", ", knownServers.keySet());
+        if (knownServers.isEmpty()) {
+            TextView chip = makeServerLabelChip(getString(R.string.app_name), false);
+            serverLabelRow.addView(chip);
+            return;
+        }
+
+        boolean first = true;
+        for (String name : knownServers.keySet()) {
+            TextView chip = makeServerLabelChip(name, true);
+            boolean focused = name.equals(focusedServerName);
+            chip.setTextColor(focused ? ThemeHelper.currentAccent : defaultServerLabelColor);
+
+            GestureDetector detector = new GestureDetector(this,
+                    new GestureDetector.SimpleOnGestureListener() {
+                        @Override
+                        public boolean onDoubleTap(@NonNull MotionEvent e) {
+                            toggleServerFocus(name);
+                            return true;
+                        }
+                    });
+            chip.setOnTouchListener((v, event) -> {
+                detector.onTouchEvent(event);
+                return true;
+            });
+
+            android.widget.LinearLayout.LayoutParams lp =
+                    (android.widget.LinearLayout.LayoutParams) chip.getLayoutParams();
+            if (!first) {
+                lp.leftMargin = (int) (8 * getResources().getDisplayMetrics().density);
+            }
+            first = false;
+
+            serverLabelRow.addView(chip);
+        }
+    }
+
+    private TextView makeServerLabelChip(String text, boolean interactive) {
+        TextView chip = new TextView(this);
+        chip.setLayoutParams(new android.widget.LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        chip.setText(text);
+        chip.setTextColor(defaultServerLabelColor);
+        chip.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 16);
+        chip.setTypeface(chip.getTypeface(), android.graphics.Typeface.BOLD);
+        chip.setMaxLines(1);
+        if (!interactive) chip.setAlpha(0.85f);
+        return chip;
+    }
+
+    private static String serverNameOf(String tabKey) {
+        if (tabKey == null) return "";
+        int slash = tabKey.indexOf('/');
+        return slash >= 0 ? tabKey.substring(0, slash) : tabKey;
+    }
+
+    private List<String> visibleTabKeys() {
+        if (focusedServerName == null) return tabKeys;
+        List<String> out = new ArrayList<>();
+        for (String key : tabKeys) {
+            if (focusedServerName.equals(serverNameOf(key))) out.add(key);
+        }
+        return out;
+    }
+
+    private void toggleServerFocus(String serverName) {
+        if (serverName == null || !knownServers.containsKey(serverName)) return;
+
+        List<String> oldVisible = visibleTabKeys();
+        int cur = viewPager.getCurrentItem();
+        String currentKey = (cur >= 0 && cur < oldVisible.size()) ? oldVisible.get(cur) : null;
+
+        if (serverName.equals(focusedServerName)) {
+            focusedServerName = null;
+            pagerAdapter.notifyDataSetChanged();
+            restoreViewPagerPosition(currentKey, null);
+            refreshServerLabel();
+            Toast.makeText(this,
+                    getString(R.string.server_focus_cleared),
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        focusedServerName = serverName;
+        pagerAdapter.notifyDataSetChanged();
+        restoreViewPagerPosition(currentKey, serverName);
+        refreshServerLabel();
+        Toast.makeText(this,
+                getString(R.string.server_focus_enabled, serverName),
+                Toast.LENGTH_SHORT).show();
+    }
+
+    private void restoreViewPagerPosition(String previousKey, String preferredServer) {
+        List<String> visible = visibleTabKeys();
+        if (visible.isEmpty()) return;
+
+        int idx = previousKey != null ? visible.indexOf(previousKey) : -1;
+        if (idx < 0 && preferredServer != null) {
+            for (int i = 0; i < visible.size(); i++) {
+                if (preferredServer.equals(serverNameOf(visible.get(i)))) { idx = i; break; }
+            }
+        }
+        if (idx < 0) idx = 0;
+        viewPager.setCurrentItem(idx, false);
     }
 
     private void refreshStatusBar() {
@@ -1297,9 +1417,8 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        int currentTab = viewPager.getCurrentItem();
-        if (currentTab >= tabKeys.size()) return;
-        String key = tabKeys.get(currentTab);
+        String key = currentTabKey();
+        if (key == null) return;
 
         int slash = key.indexOf('/');
         if (slash < 0) return;
@@ -1490,9 +1609,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private String[] currentTabTarget() {
-        int cur = viewPager.getCurrentItem();
-        if (cur < 0 || cur >= tabKeys.size()) return null;
-        String key = tabKeys.get(cur);
+        String key = currentTabKey();
+        if (key == null) return null;
         int slash = key.indexOf('/');
         if (slash < 0) return null;
         return new String[]{ key.substring(0, slash), key.substring(slash + 1), key };
@@ -1814,9 +1932,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private String currentServerName() {
-        int cur = viewPager.getCurrentItem();
-        if (cur < tabKeys.size()) {
-            String key = tabKeys.get(cur);
+        String key = currentTabKey();
+        if (key != null) {
             int slash = key.indexOf('/');
             if (slash >= 0) return key.substring(0, slash);
         }
@@ -1827,13 +1944,12 @@ public class MainActivity extends AppCompatActivity {
 
     private String currentTabKeyForServer(String serverName) {
         if (serverName == null) return null;
-        int cur = viewPager.getCurrentItem();
+        String cur = currentTabKey();
         synchronized (stateLock) {
-            if (cur >= 0 && cur < tabKeys.size()) {
-                String key = tabKeys.get(cur);
-                int slash = key.indexOf('/');
-                if (slash >= 0 && key.substring(0, slash).equals(serverName)) {
-                    return key;
+            if (cur != null) {
+                int slash = cur.indexOf('/');
+                if (slash >= 0 && cur.substring(0, slash).equals(serverName)) {
+                    return cur;
                 }
             }
             for (String key : tabKeys) {
@@ -1865,7 +1981,7 @@ public class MainActivity extends AppCompatActivity {
             pagerAdapter.notifyDataSetChanged();
             scheduleSave();
         }
-        int idx = tabKeys.indexOf(key);
+        int idx = visibleTabKeys().indexOf(key);
         if (idx >= 0) viewPager.setCurrentItem(idx, true);
 
         if (isNewTab && serviceBound && ircService.isConnected(serverName)) {
@@ -1953,8 +2069,9 @@ public class MainActivity extends AppCompatActivity {
 
     private void attachTabLongPress(View tabView, int index) {
         tabView.setOnLongClickListener(v -> {
-            if (index < tabKeys.size() && isDmTab(tabKeys.get(index))) {
-                showDmSignalMenu(tabKeys.get(index));
+            List<String> visible = visibleTabKeys();
+            if (index < visible.size() && isDmTab(visible.get(index))) {
+                showDmSignalMenu(visible.get(index));
                 return true;
             }
             return false;
@@ -1962,7 +2079,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void refreshTabLabel(String key) {
-        int idx = tabKeys.indexOf(key);
+        int idx = visibleTabKeys().indexOf(key);
         if (idx < 0) return;
         TabLayout.Tab tab = tabLayout.getTabAt(idx);
         if (tab != null) applyTabLabel(tab, key);
@@ -2288,7 +2405,7 @@ public class MainActivity extends AppCompatActivity {
 
             if (!knownServers.isEmpty()) {
                 pagerAdapter.notifyDataSetChanged();
-                serverLabel.setText(buildServerLabelText());
+                refreshServerLabel();
                 statusLabel.setText(getString(R.string.status_offline_reconnect));
             }
         } catch (JSONException e) { android.util.Log.e("MainActivity", "JSON error", e); }
@@ -2300,11 +2417,11 @@ public class MainActivity extends AppCompatActivity {
 
         ChannelPagerAdapter(AppCompatActivity a) { super(a); }
 
-        @Override public int getItemCount() { return tabKeys.size(); }
+        @Override public int getItemCount() { return visibleTabKeys().size(); }
 
         @Override
         public long getItemId(int position) {
-            String key = tabKeys.get(position);
+            String key = visibleTabKeys().get(position);
             long h = 0xcbf29ce484222325L;
             for (int i = 0; i < key.length(); i++) {
                 h ^= key.charAt(i);
@@ -2315,7 +2432,7 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public boolean containsItem(long itemId) {
-            for (String key : tabKeys) {
+            for (String key : visibleTabKeys()) {
                 long h = 0xcbf29ce484222325L;
                 for (int i = 0; i < key.length(); i++) {
                     h ^= key.charAt(i);
@@ -2329,7 +2446,7 @@ public class MainActivity extends AppCompatActivity {
         @NonNull
         @Override
         public Fragment createFragment(int position) {
-            String key = tabKeys.get(position);
+            String key = visibleTabKeys().get(position);
             ChannelFragment f = new ChannelFragment();
             Bundle args = new Bundle();
             args.putString("tab_key", key);

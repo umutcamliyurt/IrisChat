@@ -162,4 +162,6 @@ Session fingerprint (verify out-of-band):
         <item quantity="one">%d user</item>
         <item quantity="other">%d users</item>
     </plurals>
+    <string name="server_focus_enabled">Focused on %1$s</string>
+    <string name="server_focus_cleared">Showing tabs for all servers</string>
 </resources>
