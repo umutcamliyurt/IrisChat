@@ -27,7 +27,7 @@ IrisChat is a lightweight, open-source IRC client for Android with a clean moder
 
 ## Features
 
-- Message history and credentials are encrypted locally with AES-256-GCM (PBKDF2-derived key)
+- Message history and credentials are encrypted locally with AES-256-GCM (Argon2id-derived key)
 - Notifications for DMs
 - Signal Protocol with post-quantum Kyber-1024 KEM for DMs
 - Elegant interface
@@ -58,7 +58,7 @@ There is one session fingerprint per contact. If a contact's key bundle changes,
 |---|---|---|
 | ✅ | Passive MitM | DMs are E2E encrypted; Double Ratchet means one compromised key exposes nothing else |
 | ✅ | Harvest-now-decrypt-later | Kyber-1024 KEM protects against future quantum attacks |
-| ✅ | Device theft | AES-256-GCM at rest, PBKDF2-SHA256 key (310k iterations, 32-byte salt) |
+| ✅ | Device theft | AES-256-GCM at rest, Argon2id KDF (64 MB memory cost, 3 passes, 4 threads) |
 | ✅ | Credential exposure | Passwords and SASL secrets never written to disk in plaintext |
 | ❌ | Channel privacy | Channel messages are unencrypted (E2EE applies to DMs only) |
 | ❌ | Compromised contact | Verify fingerprints out-of-band |

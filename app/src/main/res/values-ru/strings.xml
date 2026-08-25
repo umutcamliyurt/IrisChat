@@ -167,4 +167,19 @@
     </plurals>
     <string name="server_focus_enabled">Фокус на %1$s</string>
     <string name="server_focus_cleared">Показаны вкладки всех серверов</string>
+    <string name="security">Безопасность</string>
+    <string name="change_password">Изменить пароль</string>
+    <string name="change_password_title">Изменить пароль</string>
+    <string name="change_password_summary">Обновите пароль, защищающий ваши данные</string>
+    <string name="changing_password">Изменение…</string>
+    <string name="password_changed">Пароль изменён</string>
+    <string name="incorrect_current_password">Неверный текущий пароль</string>
+    <string name="current_password_hint">Текущий пароль</string>
+    <string name="new_password_hint">Новый пароль</string>
+    <string name="confirm_new_password_hint">Подтвердите новый пароль</string>
+    <string name="app_version_label">IrisChat %1$s</string>
+    <string name="encryption_label">Шифрование: %1$s</string>
+    <string name="key_derivation_label">Формирование ключа: %1$s</string>
+    <string name="kdf_argon2id_summary">Argon2id</string>
+    <string name="kdf_legacy_summary">PBKDF2-HMAC-SHA256 (устаревший)</string>
 </resources>

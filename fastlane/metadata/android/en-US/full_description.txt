@@ -2,7 +2,7 @@ IrisChat is a lightweight, open-source IRC client for Android with a clean moder
 
 <b>Features:</b>
 
-- Message history and credentials are encrypted locally with AES-256-GCM (PBKDF2-derived key)
+- Message history and credentials are encrypted locally with AES-256-GCM (Argon2id-derived key)
 - Notifications for DMs
 - Signal Protocol with post-quantum Kyber-1024 KEM for DMs
 - Elegant interface

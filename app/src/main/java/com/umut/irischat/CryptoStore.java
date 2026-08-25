@@ -3,12 +3,15 @@ package com.umut.irischat;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.util.Base64;
+import android.util.Log;
+
+import org.bouncycastle.crypto.generators.Argon2BytesGenerator;
+import org.bouncycastle.crypto.params.Argon2Parameters;
 
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.security.spec.KeySpec;
 import java.util.Arrays;
-import java.util.Map;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
@@ -19,27 +22,45 @@ import javax.crypto.spec.SecretKeySpec;
 
 public final class CryptoStore {
 
+    private static final String TAG = "CryptoStore";
+
     private static final String TRANSFORMATION  = "AES/GCM/NoPadding";
-    private static final String KDF_ALGORITHM   = "PBKDF2WithHmacSHA256";
-    private static final int    KEY_LENGTH_BITS  = 256;
     private static final int    GCM_IV_LEN       = 12;
     private static final int    GCM_TAG_BITS     = 128;
-    private static final int    SALT_LEN         = 32;
-    private static final int    KDF_ITERATIONS   = 310_000;
 
     private static final String SENTINEL         = "iris-crypto-v1";
 
     private static final String PREFS_NAME       = "IrisCrypto";
     private static final String KEY_SALT         = "salt";
     private static final String KEY_PW_CHECK     = "pw_check";
+    private static final String KEY_WRAPPED_MK   = "wrapped_master_key";
     private static final String ENTRY_PREFIX     = "enc_";
 
     private static final int MAX_ENTRIES = 2048;
 
     private static final int MIN_PASSWORD_LENGTH = 4;
-
     private static final int MAX_PASSWORD_LENGTH = 1024;
     private static final int MAX_KEY_LENGTH      = 512;
+
+
+    private static final String KEY_KDF        = "kdf_algo";
+    private static final String KEY_KDF_MEM_KB = "kdf_mem_kb";
+    private static final String KEY_KDF_ITERS  = "kdf_iterations";
+    private static final String KEY_KDF_PAR    = "kdf_parallelism";
+
+    private static final String KDF_ARGON2ID   = "argon2id";
+
+    private static final int DERIVED_KEY_LEN_BYTES = 32;
+
+    private static final int ARGON2_MEMORY_KB   = 65_536;
+    private static final int ARGON2_ITERATIONS  = 3;
+    private static final int ARGON2_PARALLELISM = 4;
+    private static final int ARGON2_SALT_LEN    = 16;
+    private static final int ARGON2_VERSION     = Argon2Parameters.ARGON2_VERSION_13;
+
+    private static final String LEGACY_KDF_ALGORITHM   = "PBKDF2WithHmacSHA256";
+    private static final int    LEGACY_KDF_ITERATIONS   = 310_000;
+    private static final int    LEGACY_KEY_LENGTH_BITS  = DERIVED_KEY_LEN_BYTES * 8;
 
     private final SharedPreferences prefs;
 
@@ -51,7 +72,8 @@ public final class CryptoStore {
     }
 
     public boolean isInitialized() {
-        return prefs.contains(KEY_SALT) && prefs.contains(KEY_PW_CHECK);
+        return prefs.contains(KEY_SALT)
+                && (prefs.contains(KEY_WRAPPED_MK) || prefs.contains(KEY_PW_CHECK));
     }
 
     public boolean isUnlocked() {
@@ -69,25 +91,42 @@ public final class CryptoStore {
         return currentKey();
     }
 
+    public String getEncryptionDescription() {
+        return "AES-" + (DERIVED_KEY_LEN_BYTES * 8) + "-GCM";
+    }
+
+    public boolean isLegacyKdf() {
+        return !prefs.contains(KEY_WRAPPED_MK) && prefs.contains(KEY_PW_CHECK);
+    }
+
     public void initPassword(String password) {
         if (isInitialized()) throw new IllegalStateException("Password already set.");
         validatePassword(password);
 
-        byte[] salt = new byte[SALT_LEN];
+        byte[] mk = new byte[DERIVED_KEY_LEN_BYTES];
+        new SecureRandom().nextBytes(mk);
+
+        byte[] salt = new byte[ARGON2_SALT_LEN];
         new SecureRandom().nextBytes(salt);
 
-        byte[] rawKey = deriveKeyBytes(password, salt);
+        byte[] kekBytes = deriveKeyBytesArgon2id(
+                password, salt, ARGON2_MEMORY_KB, ARGON2_ITERATIONS, ARGON2_PARALLELISM);
         try {
-            SecretKey key = new SecretKeySpec(rawKey, "AES");
-            String pwCheck = b64Encode(encryptWithKey(SENTINEL.getBytes(StandardCharsets.UTF_8), key));
+            SecretKey kek = new SecretKeySpec(kekBytes, "AES");
+            byte[] wrapped = encryptWithKey(mk, kek);
             prefs.edit()
-                    .putString(KEY_SALT,     b64Encode(salt))
-                    .putString(KEY_PW_CHECK, pwCheck)
+                    .putString(KEY_SALT,       b64Encode(salt))
+                    .putString(KEY_WRAPPED_MK, b64Encode(wrapped))
+                    .putString(KEY_KDF,        KDF_ARGON2ID)
+                    .putInt(KEY_KDF_MEM_KB,    ARGON2_MEMORY_KB)
+                    .putInt(KEY_KDF_ITERS,     ARGON2_ITERATIONS)
+                    .putInt(KEY_KDF_PAR,       ARGON2_PARALLELISM)
                     .apply();
-            secretKeyBytes = rawKey;
-            rawKey = null;
+            secretKeyBytes = mk;
+            mk = null;
         } finally {
-            if (rawKey != null) Arrays.fill(rawKey, (byte) 0);
+            Arrays.fill(kekBytes, (byte) 0);
+            if (mk != null) Arrays.fill(mk, (byte) 0);
         }
     }
 
@@ -95,25 +134,28 @@ public final class CryptoStore {
         if (!isInitialized()) throw new IllegalStateException("Store not initialised.");
         if (password == null) return false;
 
-        byte[] salt   = b64Decode(prefs.getString(KEY_SALT, ""));
-        byte[] rawKey = deriveKeyBytes(password, salt);
-        try {
-            SecretKey key = new SecretKeySpec(rawKey, "AES");
-            byte[] blob      = b64Decode(prefs.getString(KEY_PW_CHECK, ""));
-            byte[] plaintext = decrypt(blob, key);
-            byte[] expected  = SENTINEL.getBytes(StandardCharsets.UTF_8);
-            if (!constantTimeEquals(plaintext, expected)) {
-                return false;
-            }
-            zeroKeyBytes();
-            secretKeyBytes = rawKey;
-            rawKey = null;
-            return true;
-        } catch (Exception e) {
-            return false;
-        } finally {
-            if (rawKey != null) Arrays.fill(rawKey, (byte) 0);
+        boolean legacyFormat = !prefs.contains(KEY_WRAPPED_MK);
+        boolean paramsStale  = false;
+        if (!legacyFormat) {
+            int mem   = prefs.getInt(KEY_KDF_MEM_KB, ARGON2_MEMORY_KB);
+            int iters = prefs.getInt(KEY_KDF_ITERS,  ARGON2_ITERATIONS);
+            int par   = prefs.getInt(KEY_KDF_PAR,    ARGON2_PARALLELISM);
+            paramsStale = mem != ARGON2_MEMORY_KB
+                    || iters != ARGON2_ITERATIONS
+                    || par != ARGON2_PARALLELISM;
         }
+
+        byte[] mk = unwrapMasterKeyWithPassword(password);
+        if (mk == null) return false;
+
+        zeroKeyBytes();
+        secretKeyBytes = mk;
+
+        if (legacyFormat || paramsStale) {
+            migrateToCurrentArgon2Params(password);
+        }
+
+        return true;
     }
 
     public void lock() {
@@ -125,60 +167,35 @@ public final class CryptoStore {
         if (newPassword == null || newPassword.length() < MIN_PASSWORD_LENGTH) return false;
         if (newPassword.length() > MAX_PASSWORD_LENGTH) return false;
 
-        byte[] oldSalt  = b64Decode(prefs.getString(KEY_SALT, ""));
-        byte[] oldRaw   = deriveKeyBytes(oldPassword, oldSalt);
-        SecretKey oldKey = new SecretKeySpec(oldRaw, "AES");
+        byte[] mk = unwrapMasterKeyWithPassword(oldPassword);
+        if (mk == null) return false;
 
-        try {
-            byte[] blob = b64Decode(prefs.getString(KEY_PW_CHECK, ""));
-            byte[] pt   = decrypt(blob, oldKey);
-            if (!constantTimeEquals(pt, SENTINEL.getBytes(StandardCharsets.UTF_8))) return false;
-        } catch (Exception e) {
-            return false;
-        } finally {
-            Arrays.fill(oldRaw, (byte) 0);
-        }
-
-        oldRaw = deriveKeyBytes(oldPassword, oldSalt);
-        oldKey = new SecretKeySpec(oldRaw, "AES");
-
-        byte[] newSalt = new byte[SALT_LEN];
+        byte[] newSalt = new byte[ARGON2_SALT_LEN];
         new SecureRandom().nextBytes(newSalt);
-        byte[] newRaw = deriveKeyBytes(newPassword, newSalt);
-        SecretKey newKey = new SecretKeySpec(newRaw, "AES");
+        byte[] newKek = deriveKeyBytesArgon2id(
+                newPassword, newSalt, ARGON2_MEMORY_KB, ARGON2_ITERATIONS, ARGON2_PARALLELISM);
 
         try {
-            SharedPreferences.Editor editor = prefs.edit();
-            Map<String, ?> snapshot = prefs.getAll();
-
-            for (Map.Entry<String, ?> entry : snapshot.entrySet()) {
-                String prefKey = entry.getKey();
-                if (!prefKey.startsWith(ENTRY_PREFIX)) continue;
-                try {
-                    Object raw = entry.getValue();
-                    if (!(raw instanceof String)) continue;
-                    byte[] oldBlob = b64Decode((String) raw);
-                    byte[] plainPt = decrypt(oldBlob, oldKey);
-                    byte[] newBlob = encryptWithKey(plainPt, newKey);
-                    editor.putString(prefKey, b64Encode(newBlob));
-                } catch (Exception ignored) {
-                    editor.remove(prefKey);
-                }
-            }
-
-            String newPwCheck = b64Encode(encryptWithKey(
-                    SENTINEL.getBytes(StandardCharsets.UTF_8), newKey));
-            editor.putString(KEY_SALT,     b64Encode(newSalt));
-            editor.putString(KEY_PW_CHECK, newPwCheck);
-            editor.apply();
+            SecretKey kek = new SecretKeySpec(newKek, "AES");
+            byte[] wrapped = encryptWithKey(mk, kek);
+            prefs.edit()
+                    .putString(KEY_SALT,       b64Encode(newSalt))
+                    .putString(KEY_WRAPPED_MK, b64Encode(wrapped))
+                    .putString(KEY_KDF,        KDF_ARGON2ID)
+                    .putInt(KEY_KDF_MEM_KB,    ARGON2_MEMORY_KB)
+                    .putInt(KEY_KDF_ITERS,     ARGON2_ITERATIONS)
+                    .putInt(KEY_KDF_PAR,       ARGON2_PARALLELISM)
+                    .remove(KEY_PW_CHECK)
+                    .apply();
 
             zeroKeyBytes();
-            secretKeyBytes = newRaw;
-            newRaw = null;
+            secretKeyBytes = mk;
             return true;
+        } catch (Exception e) {
+            Arrays.fill(mk, (byte) 0);
+            return false;
         } finally {
-            Arrays.fill(oldRaw, (byte) 0);
-            if (newRaw != null) Arrays.fill(newRaw, (byte) 0);
+            Arrays.fill(newKek, (byte) 0);
         }
     }
 
@@ -221,6 +238,68 @@ public final class CryptoStore {
         return prefs.contains(ENTRY_PREFIX + key);
     }
 
+
+    private byte[] unwrapMasterKeyWithPassword(String password) {
+        if (password == null) return null;
+
+        byte[] salt = b64Decode(prefs.getString(KEY_SALT, ""));
+        boolean hasWrappedKey = prefs.contains(KEY_WRAPPED_MK);
+        byte[] kekBytes = null;
+
+        try {
+            if (hasWrappedKey) {
+                int mem   = prefs.getInt(KEY_KDF_MEM_KB, ARGON2_MEMORY_KB);
+                int iters = prefs.getInt(KEY_KDF_ITERS,  ARGON2_ITERATIONS);
+                int par   = prefs.getInt(KEY_KDF_PAR,    ARGON2_PARALLELISM);
+                kekBytes = deriveKeyBytesArgon2id(password, salt, mem, iters, par);
+                SecretKey kek = new SecretKeySpec(kekBytes, "AES");
+                byte[] wrapped = b64Decode(prefs.getString(KEY_WRAPPED_MK, ""));
+                return decrypt(wrapped, kek);
+            } else {
+                byte[] legacyRaw = deriveKeyBytesPbkdf2Legacy(password, salt);
+                SecretKey legacyKey = new SecretKeySpec(legacyRaw, "AES");
+                byte[] blob = b64Decode(prefs.getString(KEY_PW_CHECK, ""));
+                byte[] plaintext = decrypt(blob, legacyKey);
+                if (!constantTimeEquals(plaintext, SENTINEL.getBytes(StandardCharsets.UTF_8))) {
+                    Arrays.fill(legacyRaw, (byte) 0);
+                    return null;
+                }
+                return legacyRaw;
+            }
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (kekBytes != null) Arrays.fill(kekBytes, (byte) 0);
+        }
+    }
+
+    private void migrateToCurrentArgon2Params(String password) {
+        byte[] mk = secretKeyBytes;
+        if (mk == null) return;
+
+        byte[] newSalt = new byte[ARGON2_SALT_LEN];
+        new SecureRandom().nextBytes(newSalt);
+        byte[] newKek = deriveKeyBytesArgon2id(
+                password, newSalt, ARGON2_MEMORY_KB, ARGON2_ITERATIONS, ARGON2_PARALLELISM);
+        try {
+            SecretKey kek = new SecretKeySpec(newKek, "AES");
+            byte[] wrapped = encryptWithKey(mk, kek);
+            prefs.edit()
+                    .putString(KEY_SALT,       b64Encode(newSalt))
+                    .putString(KEY_WRAPPED_MK, b64Encode(wrapped))
+                    .putString(KEY_KDF,        KDF_ARGON2ID)
+                    .putInt(KEY_KDF_MEM_KB,    ARGON2_MEMORY_KB)
+                    .putInt(KEY_KDF_ITERS,     ARGON2_ITERATIONS)
+                    .putInt(KEY_KDF_PAR,       ARGON2_PARALLELISM)
+                    .remove(KEY_PW_CHECK)
+                    .apply();
+        } catch (Exception e) {
+            Log.w(TAG, "Argon2id KDF migration failed; will retry on next unlock", e);
+        } finally {
+            Arrays.fill(newKek, (byte) 0);
+        }
+    }
+
     private static void validatePassword(String password) {
         if (password == null || password.length() < MIN_PASSWORD_LENGTH) {
             throw new IllegalArgumentException(
@@ -234,7 +313,7 @@ public final class CryptoStore {
     private static void validateEntryKey(String key) {
         if (key == null || key.isEmpty()) throw new IllegalArgumentException("Key must not be empty.");
         if (key.length() > MAX_KEY_LENGTH) throw new IllegalArgumentException("Key too long.");
-        if (key.equals(KEY_SALT) || key.equals(KEY_PW_CHECK)) {
+        if (key.equals(KEY_SALT) || key.equals(KEY_PW_CHECK) || key.equals(KEY_WRAPPED_MK)) {
             throw new IllegalArgumentException("Reserved key name: " + key);
         }
         if (key.startsWith(ENTRY_PREFIX)) {
@@ -242,14 +321,38 @@ public final class CryptoStore {
         }
     }
 
-    private byte[] deriveKeyBytes(String password, byte[] salt) {
+
+    private byte[] deriveKeyBytesArgon2id(String password, byte[] salt,
+                                          int memoryKb, int iterations, int parallelism) {
+        Argon2Parameters params = new Argon2Parameters.Builder(Argon2Parameters.ARGON2_id)
+                .withVersion(ARGON2_VERSION)
+                .withIterations(iterations)
+                .withMemoryAsKB(memoryKb)
+                .withParallelism(parallelism)
+                .withSalt(salt)
+                .build();
+
+        Argon2BytesGenerator generator = new Argon2BytesGenerator();
+        generator.init(params);
+
+        byte[] out = new byte[DERIVED_KEY_LEN_BYTES];
+        char[] pwChars = password.toCharArray();
         try {
-            SecretKeyFactory factory = SecretKeyFactory.getInstance(KDF_ALGORITHM);
+            generator.generateBytes(pwChars, out, 0, out.length);
+            return out;
+        } finally {
+            Arrays.fill(pwChars, '\0');
+        }
+    }
+
+    private byte[] deriveKeyBytesPbkdf2Legacy(String password, byte[] salt) {
+        try {
+            SecretKeyFactory factory = SecretKeyFactory.getInstance(LEGACY_KDF_ALGORITHM);
             KeySpec spec = new PBEKeySpec(
-                    password.toCharArray(), salt, KDF_ITERATIONS, KEY_LENGTH_BITS);
+                    password.toCharArray(), salt, LEGACY_KDF_ITERATIONS, LEGACY_KEY_LENGTH_BITS);
             return factory.generateSecret(spec).getEncoded();
         } catch (Exception e) {
-            throw new RuntimeException("Key derivation failed", e);
+            throw new RuntimeException("Legacy key derivation failed", e);
         }
     }
 

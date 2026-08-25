@@ -164,4 +164,19 @@ Session fingerprint (verify out-of-band):
     </plurals>
     <string name="server_focus_enabled">Focused on %1$s</string>
     <string name="server_focus_cleared">Showing tabs for all servers</string>
+    <string name="security">Security</string>
+    <string name="change_password">Change Password</string>
+    <string name="change_password_title">Change Password</string>
+    <string name="change_password_summary">Update the password that protects your data</string>
+    <string name="changing_password">Changing…</string>
+    <string name="password_changed">Password changed</string>
+    <string name="incorrect_current_password">Current password is incorrect</string>
+    <string name="current_password_hint">Current password</string>
+    <string name="new_password_hint">New password</string>
+    <string name="confirm_new_password_hint">Confirm new password</string>
+    <string name="app_version_label">IrisChat %1$s</string>
+    <string name="encryption_label">Encryption: %1$s</string>
+    <string name="key_derivation_label">Key derivation: %1$s</string>
+    <string name="kdf_argon2id_summary">Argon2id</string>
+    <string name="kdf_legacy_summary">PBKDF2-HMAC-SHA256 (legacy)</string>
 </resources>

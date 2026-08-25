@@ -164,4 +164,19 @@ Oturum parmak izi (bant dışı doğrulayın):
     </plurals>
     <string name="server_focus_enabled">%1$s sunucusuna odaklanıldı</string>
     <string name="server_focus_cleared">Tüm sunucuların sekmeleri gösteriliyor</string>
+    <string name="security">Güvenlik</string>
+    <string name="change_password">Şifreyi Değiştir</string>
+    <string name="change_password_title">Şifreyi Değiştir</string>
+    <string name="change_password_summary">Verilerinizi koruyan şifreyi güncelleyin</string>
+    <string name="changing_password">Değiştiriliyor…</string>
+    <string name="password_changed">Şifre değiştirildi</string>
+    <string name="incorrect_current_password">Mevcut şifre yanlış</string>
+    <string name="current_password_hint">Mevcut şifre</string>
+    <string name="new_password_hint">Yeni şifre</string>
+    <string name="confirm_new_password_hint">Yeni şifreyi onayla</string>
+    <string name="app_version_label">IrisChat %1$s</string>
+    <string name="encryption_label">Şifreleme: %1$s</string>
+    <string name="key_derivation_label">Anahtar türetme: %1$s</string>
+    <string name="kdf_argon2id_summary">Argon2id</string>
+    <string name="kdf_legacy_summary">PBKDF2-HMAC-SHA256 (eski)</string>
 </resources>

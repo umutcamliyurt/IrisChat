@@ -15,8 +15,8 @@ android {
         applicationId = "com.umut.irischat"
         minSdk = 24
         targetSdk = 35
-        versionCode = 171
-        versionName = "1.7.1"
+        versionCode = 180
+        versionName = "1.8"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true
 
@@ -78,6 +78,7 @@ dependencies {
 
     implementation("com.github.pircbotx:pircbotx:2.3.1")
     implementation("org.signal:libsignal-android:0.86.5")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)

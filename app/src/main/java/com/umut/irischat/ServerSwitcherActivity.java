@@ -2,12 +2,17 @@ package com.umut.irischat;
 
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.content.res.Configuration;
+import android.graphics.Color;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
 import android.app.Dialog;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -23,6 +28,7 @@ import androidx.annotation.Nullable;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.SwitchCompat;
+import androidx.core.content.ContextCompat;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
@@ -31,6 +37,7 @@ import androidx.core.view.WindowInsetsControllerCompat;
 import com.google.android.material.bottomsheet.BottomSheetBehavior;
 import com.google.android.material.bottomsheet.BottomSheetDialog;
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment;
+import com.google.android.material.button.MaterialButton;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -179,15 +186,17 @@ public class ServerSwitcherActivity extends AppCompatActivity {
     private void showSettingsDialog() {
         View view = LayoutInflater.from(this).inflate(R.layout.dialog_settings, null);
 
+        int currentAccent = ThemeHelper.getAccent(crypto);
+
         androidx.appcompat.widget.SwitchCompat switchDmAd =
                 view.findViewById(R.id.switchDmAdvertisement);
         switchDmAd.setChecked("true".equals(
                 crypto.getString(MainActivity.KEY_DM_ADVERTISEMENT, null)));
         switchDmAd.setOnCheckedChangeListener((btn, checked) ->
                 crypto.putString(MainActivity.KEY_DM_ADVERTISEMENT, checked ? "true" : "false"));
+        tintSwitch(this, switchDmAd, currentAccent);
 
         android.widget.LinearLayout swatchRow = view.findViewById(R.id.colorSwatchRow);
-        int currentAccent  = ThemeHelper.getAccent(crypto);
         int swatchSizePx   = (int) (36 * getResources().getDisplayMetrics().density);
         int swatchMarginPx = (int) (8  * getResources().getDisplayMetrics().density);
         int strokePx       = (int) (3  * getResources().getDisplayMetrics().density);
@@ -252,7 +261,21 @@ public class ServerSwitcherActivity extends AppCompatActivity {
             updateLangButtons(btnEn, btnTr, btnRu, "ru");
         });
 
-        new AlertDialog.Builder(this, R.style.IrisDialog)
+        Button btnChangePassword = view.findViewById(R.id.btnChangePassword);
+        btnChangePassword.setTextColor(currentAccent);
+        if (btnChangePassword instanceof MaterialButton) {
+            ((MaterialButton) btnChangePassword).setStrokeColor(ColorStateList.valueOf(currentAccent));
+        }
+        btnChangePassword.setOnClickListener(v -> showChangePasswordDialog());
+
+        TextView versionText    = view.findViewById(R.id.settingsVersionText);
+        TextView encryptionText = view.findViewById(R.id.settingsEncryptionText);
+        TextView kdfText        = view.findViewById(R.id.settingsKdfText);
+        versionText.setText(getString(R.string.app_version_label, getAppVersionName()));
+        encryptionText.setText(getString(R.string.encryption_label, crypto.getEncryptionDescription()));
+        kdfText.setText(getString(R.string.key_derivation_label, buildKdfSummary()));
+
+        AlertDialog settingsDialog = new AlertDialog.Builder(this, R.style.IrisDialog)
                 .setTitle(R.string.settings)
                 .setView(view)
                 .setPositiveButton(R.string.settings_done, (d, w) -> {
@@ -262,7 +285,155 @@ public class ServerSwitcherActivity extends AppCompatActivity {
                         applyLocale(true);
                     }
                 })
-                .show();
+                .create();
+        settingsDialog.setOnShowListener(d -> {
+            settingsDialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(currentAccent);
+            Window window = settingsDialog.getWindow();
+            if (window != null) {
+                window.setLayout(addServerButton.getWidth(), ViewGroup.LayoutParams.WRAP_CONTENT);
+            }
+        });
+        settingsDialog.show();
+    }
+
+    private String getAppVersionName() {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return info.versionName != null ? info.versionName : "";
+        } catch (PackageManager.NameNotFoundException e) {
+            return "";
+        }
+    }
+
+    private String buildKdfSummary() {
+        return crypto.isLegacyKdf()
+                ? getString(R.string.kdf_legacy_summary)
+                : getString(R.string.kdf_argon2id_summary);
+    }
+
+    private void showChangePasswordDialog() {
+        View view = LayoutInflater.from(this).inflate(R.layout.dialog_change_password, null);
+
+        EditText currentInput = view.findViewById(R.id.inputCurrentPassword);
+        EditText newInput     = view.findViewById(R.id.inputNewPassword);
+        EditText confirmInput = view.findViewById(R.id.inputConfirmPassword);
+
+        setupPasswordToggle(view.findViewById(R.id.toggleCurrentPasswordVisibility), currentInput);
+        setupPasswordToggle(view.findViewById(R.id.toggleNewPasswordVisibility), newInput);
+        setupPasswordToggle(view.findViewById(R.id.toggleConfirmPasswordVisibility), confirmInput);
+
+        int accent = ThemeHelper.getAccent(crypto);
+
+        AlertDialog dialog = new AlertDialog.Builder(this, R.style.IrisDialog)
+                .setTitle(R.string.change_password_title)
+                .setView(view)
+                .setPositiveButton(R.string.change_password, null)
+                .setNegativeButton(R.string.cancel, null)
+                .create();
+
+        dialog.setOnShowListener(d -> {
+            Button changeButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            Button cancelButton = dialog.getButton(AlertDialog.BUTTON_NEGATIVE);
+
+            changeButton.setTextColor(enabledStateTextColor(accent));
+            cancelButton.setTextColor(accent);
+
+            changeButton.setOnClickListener(v -> {
+                String current = currentInput.getText().toString();
+                String next    = newInput.getText().toString();
+                String confirm = confirmInput.getText().toString();
+
+                if (current.isEmpty() || next.isEmpty()) {
+                    Toast.makeText(this, R.string.password_empty, Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (next.length() < 4) {
+                    Toast.makeText(this, R.string.password_too_short, Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (!next.equals(confirm)) {
+                    Toast.makeText(this, R.string.passwords_do_not_match, Toast.LENGTH_SHORT).show();
+                    confirmInput.requestFocus();
+                    return;
+                }
+
+                changeButton.setEnabled(false);
+                cancelButton.setEnabled(false);
+                changeButton.setText(R.string.changing_password);
+
+                new Thread(() -> {
+                    boolean ok = crypto.changePassword(current, next);
+                    runOnUiThread(() -> {
+                        changeButton.setEnabled(true);
+                        cancelButton.setEnabled(true);
+                        changeButton.setText(R.string.change_password);
+                        if (ok) {
+                            Toast.makeText(this, R.string.password_changed, Toast.LENGTH_SHORT).show();
+                            dialog.dismiss();
+                        } else {
+                            Toast.makeText(this, R.string.incorrect_current_password,
+                                    Toast.LENGTH_SHORT).show();
+                            currentInput.selectAll();
+                            currentInput.requestFocus();
+                        }
+                    });
+                }).start();
+            });
+        });
+
+        dialog.show();
+    }
+
+    private static void tintSwitch(Context ctx, SwitchCompat sw, int accent) {
+        int uncheckedThumb = ContextCompat.getColor(ctx, R.color.text_secondary);
+        int uncheckedTrack = ContextCompat.getColor(ctx, R.color.divider);
+        int checkedTrack   = Color.argb(140,
+                Color.red(accent), Color.green(accent), Color.blue(accent));
+
+        ColorStateList thumbStates = new ColorStateList(
+                new int[][] {
+                        new int[] { android.R.attr.state_checked },
+                        new int[] {}
+                },
+                new int[] { accent, uncheckedThumb }
+        );
+        ColorStateList trackStates = new ColorStateList(
+                new int[][] {
+                        new int[] { android.R.attr.state_checked },
+                        new int[] {}
+                },
+                new int[] { checkedTrack, uncheckedTrack }
+        );
+
+        sw.setThumbTintList(thumbStates);
+        sw.setTrackTintList(trackStates);
+    }
+
+    private ColorStateList enabledStateTextColor(int accent) {
+        int disabled = Color.argb(
+                Math.round(Color.alpha(accent) * 0.4f),
+                Color.red(accent), Color.green(accent), Color.blue(accent));
+        return new ColorStateList(
+                new int[][] {
+                        new int[] { -android.R.attr.state_enabled },
+                        new int[] {}
+                },
+                new int[] { disabled, accent }
+        );
+    }
+
+    private void setupPasswordToggle(ImageView toggle, EditText input) {
+        final boolean[] visible = {false};
+        toggle.setOnClickListener(v -> {
+            visible[0] = !visible[0];
+            input.setInputType(visible[0]
+                    ? InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                    : InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            toggle.setImageResource(visible[0]
+                    ? android.R.drawable.ic_menu_close_clear_cancel
+                    : android.R.drawable.ic_menu_view);
+            input.setSelection(input.getText().length());
+        });
     }
 
     private void applyLocale(boolean restart) {
@@ -427,6 +598,9 @@ public class ServerSwitcherActivity extends AppCompatActivity {
             TextView     titleView          = view.findViewById(R.id.sheetTitle);
 
             titleView.setText(existing == null ? R.string.add_server_title : R.string.edit_server_title);
+
+            tintSwitch(requireContext(), tlsSwitch, ThemeHelper.currentAccent);
+            tintSwitch(requireContext(), saslSwitch, ThemeHelper.currentAccent);
 
             tlsSwitch.setOnCheckedChangeListener((btn, isChecked) -> {
                 String p = portInput.getText().toString().trim();
