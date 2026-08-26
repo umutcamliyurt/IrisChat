@@ -269,11 +269,7 @@ public class ServerSwitcherActivity extends AppCompatActivity {
         btnChangePassword.setOnClickListener(v -> showChangePasswordDialog());
 
         TextView versionText    = view.findViewById(R.id.settingsVersionText);
-        TextView encryptionText = view.findViewById(R.id.settingsEncryptionText);
-        TextView kdfText        = view.findViewById(R.id.settingsKdfText);
         versionText.setText(getString(R.string.app_version_label, getAppVersionName()));
-        encryptionText.setText(getString(R.string.encryption_label, crypto.getEncryptionDescription()));
-        kdfText.setText(getString(R.string.key_derivation_label, buildKdfSummary()));
 
         AlertDialog settingsDialog = new AlertDialog.Builder(this, R.style.IrisDialog)
                 .setTitle(R.string.settings)
@@ -303,12 +299,6 @@ public class ServerSwitcherActivity extends AppCompatActivity {
         } catch (PackageManager.NameNotFoundException e) {
             return "";
         }
-    }
-
-    private String buildKdfSummary() {
-        return crypto.isLegacyKdf()
-                ? getString(R.string.kdf_legacy_summary)
-                : getString(R.string.kdf_argon2id_summary);
     }
 
     private void showChangePasswordDialog() {

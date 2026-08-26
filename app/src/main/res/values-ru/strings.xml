@@ -178,8 +178,4 @@
     <string name="new_password_hint">Новый пароль</string>
     <string name="confirm_new_password_hint">Подтвердите новый пароль</string>
     <string name="app_version_label">IrisChat %1$s</string>
-    <string name="encryption_label">Шифрование: %1$s</string>
-    <string name="key_derivation_label">Формирование ключа: %1$s</string>
-    <string name="kdf_argon2id_summary">Argon2id</string>
-    <string name="kdf_legacy_summary">PBKDF2-HMAC-SHA256 (устаревший)</string>
 </resources>

@@ -175,8 +175,4 @@ Oturum parmak izi (bant dışı doğrulayın):
     <string name="new_password_hint">Yeni şifre</string>
     <string name="confirm_new_password_hint">Yeni şifreyi onayla</string>
     <string name="app_version_label">IrisChat %1$s</string>
-    <string name="encryption_label">Şifreleme: %1$s</string>
-    <string name="key_derivation_label">Anahtar türetme: %1$s</string>
-    <string name="kdf_argon2id_summary">Argon2id</string>
-    <string name="kdf_legacy_summary">PBKDF2-HMAC-SHA256 (eski)</string>
 </resources>

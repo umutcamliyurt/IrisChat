@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:fillViewport="false"
+    android:scrollbars="vertical"
+    android:overScrollMode="ifContentScrolls">
+
+<LinearLayout
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
@@ -26,14 +33,14 @@
             android:orientation="vertical">
 
             <TextView
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/send_app_ad"
                 android:textColor="@color/text_primary"
                 android:textSize="14sp" />
 
             <TextView
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/send_app_ad_summary"
                 android:textColor="@color/text_secondary"
@@ -175,14 +182,14 @@
             android:orientation="vertical">
 
             <TextView
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/security"
                 android:textColor="@color/text_primary"
                 android:textSize="14sp" />
 
             <TextView
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/change_password_summary"
                 android:textColor="@color/text_secondary"
@@ -194,7 +201,19 @@
             android:id="@+id/btnChangePassword"
             style="?attr/materialButtonOutlinedStyle"
             android:layout_width="wrap_content"
-            android:layout_height="48dp"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:minWidth="0dp"
+            android:maxWidth="140dp"
+            android:layout_marginStart="12dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:singleLine="false"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:autoSizeTextType="uniform"
+            android:autoSizeMinTextSize="10sp"
+            android:autoSizeMaxTextSize="13sp"
             android:text="@string/change_password"
             android:textSize="13sp" />
 
@@ -223,24 +242,7 @@
             android:textSize="11sp"
             tools:text="IrisChat v1.0.0" />
 
-        <TextView
-            android:id="@+id/settingsEncryptionText"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textColor="@color/text_secondary"
-            android:textSize="11sp"
-            android:layout_marginTop="2dp"
-            tools:text="Encryption: AES-256-GCM" />
-
-        <TextView
-            android:id="@+id/settingsKdfText"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textColor="@color/text_secondary"
-            android:textSize="11sp"
-            android:layout_marginTop="2dp"
-            tools:text="Key derivation: Argon2id" />
-
     </LinearLayout>
 
 </LinearLayout>
+</ScrollView>
