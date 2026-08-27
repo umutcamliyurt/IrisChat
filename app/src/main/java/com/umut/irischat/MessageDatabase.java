@@ -27,7 +27,7 @@ public final class MessageDatabase {
     private static final int    GCM_TAG_BITS    = 128;
 
     private static final String DB_NAME    = "irischat_messages.db";
-    private static final int    DB_VERSION = 2;
+    private static final int    DB_VERSION = 3;
 
     static final String TABLE          = "messages";
     static final String COL_ID         = "id";
@@ -41,6 +41,7 @@ public final class MessageDatabase {
     static final String COL_ENCRYPTED  = "encrypted";
     static final String COL_RAW_WIRE   = "raw_wire";
     static final String COL_TIMESTAMP  = "timestamp";
+    static final String COL_MSG_ID_HASH = "msg_id_hash";
 
     public static final int DEFAULT_PAGE_SIZE = 50;
 
@@ -74,10 +75,12 @@ public final class MessageDatabase {
         if (old != null) Arrays.fill(old, (byte) 0);
     }
 
+    public static final long DUPLICATE_MESSAGE = -2L;
+
     public long insert(String tabKey, ChatMessage msg) {
         byte[] keySnapshot = requireKey();
         SQLiteDatabase db = helper.getWritableDatabase();
-        ContentValues cv = new ContentValues(10);
+        ContentValues cv = new ContentValues(11);
         cv.put(COL_TAB_KEY,    tabKey);
         cv.put(COL_TYPE,       msg.getType().name());
         cv.put(COL_NICK,       encryptNullable(msg.getNick(),        keySnapshot));
@@ -88,11 +91,50 @@ public final class MessageDatabase {
         cv.put(COL_ENCRYPTED,  msg.isEncrypted() ? 1 : 0);
         cv.put(COL_RAW_WIRE,   encryptNullable(msg.getRawWire(),     keySnapshot));
         cv.put(COL_TIMESTAMP,  msg.getTimestamp());
+        cv.put(COL_MSG_ID_HASH, msgIdHash(tabKey, msg.getMsgId()));
         try {
             return db.insertOrThrow(TABLE, null, cv);
         } catch (Exception e) {
             Log.e(TAG, "insert failed", e);
             return -1;
+        }
+    }
+
+    public long insertIfNew(String tabKey, ChatMessage msg) {
+        String msgId = msg.getMsgId();
+        if (msgId != null && !msgId.isEmpty()) {
+            if (existsByMsgId(tabKey, msgId)) return DUPLICATE_MESSAGE;
+        } else if (msg.getTimestamp() > 0
+                && existsAtTimestamp(tabKey, msg.getNick(), msg.getText(), msg.getTimestamp())) {
+            return DUPLICATE_MESSAGE;
+        }
+        return insert(tabKey, msg);
+    }
+
+    public boolean existsByMsgId(String tabKey, String msgId) {
+        if (msgId == null || msgId.isEmpty()) return false;
+        String hash = msgIdHash(tabKey, msgId);
+        Cursor c = helper.getReadableDatabase().rawQuery(
+                "SELECT 1 FROM " + TABLE + " WHERE " + COL_TAB_KEY + "=? AND "
+                        + COL_MSG_ID_HASH + "=? LIMIT 1",
+                new String[]{tabKey, hash});
+        try {
+            return c.moveToFirst();
+        } finally {
+            c.close();
+        }
+    }
+
+    private static String msgIdHash(String tabKey, String msgId) {
+        if (msgId == null || msgId.isEmpty()) return null;
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            md.update(tabKey.getBytes(StandardCharsets.UTF_8));
+            md.update((byte) 0);
+            md.update(msgId.getBytes(StandardCharsets.UTF_8));
+            return java.util.Base64.getEncoder().encodeToString(md.digest());
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -324,12 +366,17 @@ public final class MessageDatabase {
                             COL_IMAGE_URL  + " BLOB, " +
                             COL_ENCRYPTED  + " INTEGER NOT NULL DEFAULT 0, " +
                             COL_RAW_WIRE   + " BLOB, " +
-                            COL_TIMESTAMP  + " INTEGER NOT NULL DEFAULT 0" +
+                            COL_TIMESTAMP  + " INTEGER NOT NULL DEFAULT 0, " +
+                            COL_MSG_ID_HASH + " TEXT" +
                             ")"
             );
             db.execSQL(
                     "CREATE INDEX idx_messages_tab ON " + TABLE +
                             "(" + COL_TAB_KEY + "," + COL_ID + ")"
+            );
+            db.execSQL(
+                    "CREATE INDEX idx_messages_msgid ON " + TABLE +
+                            "(" + COL_TAB_KEY + "," + COL_MSG_ID_HASH + ")"
             );
         }
 
@@ -338,6 +385,14 @@ public final class MessageDatabase {
             if (oldVersion < 2) {
                 db.execSQL("ALTER TABLE " + TABLE +
                         " ADD COLUMN " + COL_TIMESTAMP + " INTEGER NOT NULL DEFAULT 0");
+            }
+            if (oldVersion < 3) {
+                db.execSQL("ALTER TABLE " + TABLE +
+                        " ADD COLUMN " + COL_MSG_ID_HASH + " TEXT");
+                db.execSQL(
+                        "CREATE INDEX IF NOT EXISTS idx_messages_msgid ON " + TABLE +
+                                "(" + COL_TAB_KEY + "," + COL_MSG_ID_HASH + ")"
+                );
             }
         }
 

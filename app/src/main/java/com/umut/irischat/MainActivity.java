@@ -49,6 +49,7 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String KEY_SAVED_SERVERS    = "saved_servers";
     private static final String KEY_SAVED_DMS        = "saved_dms";
+    private static final String KEY_UNREAD_COUNTS    = "unread_counts";
     static final String KEY_DM_ADVERTISEMENT = "dm_advertisement_enabled";
 
     private static final int MAX_MSG_LENGTH = 400;
@@ -129,6 +130,10 @@ public class MainActivity extends AppCompatActivity {
     final Map<String, Server>            knownServers = new LinkedHashMap<>();
     final Object stateLock = new Object();
 
+    final Map<String, Integer> unreadCounts = new LinkedHashMap<>();
+    private volatile String  visibleTabKey     = null;
+    private volatile boolean isAppInForeground = false;
+
     private final android.os.Handler saveHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
     private static final long SAVE_DEBOUNCE_MS = 500;
@@ -187,7 +192,8 @@ public class MainActivity extends AppCompatActivity {
                     runOnUiThread(() -> showConnectionFailedToast(serverName));
                 }
                 @Override public void onMessage(String serverName, String channel,
-                                                String nick, String text, String imageUrl) {
+                                                String nick, String text, String imageUrl,
+                                                String msgId, long timestampMs) {
                     String key = tabKey(serverName, channel);
 
                     String pendingMapKey = key + "\u0000" + nick;
@@ -212,21 +218,24 @@ public class MainActivity extends AppCompatActivity {
                                 SignalStore.DecryptResult result = signalStore.receiveMsgChunk(nick, text);
                                 if (result == null) return;
                                 appendToTab(key, new ChatMessage(nick, result.plaintext,
-                                        ChatMessage.Type.RECEIVED, null, null, null, true, result.rawWire));
+                                        ChatMessage.Type.RECEIVED, null, null, null, true,
+                                        result.rawWire, timestampMs, msgId));
                                 runOnUiThread(() -> refreshTabLabel(key));
                             } catch (Exception e) {
                                 android.util.Log.w("MainActivity",
                                         "Decrypt error from " + nick + ": " + e.getMessage());
                                 appendToTab(key, new ChatMessage(nick,
                                         getString(R.string.encrypted_message_failed),
-                                        ChatMessage.Type.RECEIVED, null, null, null, true, text));
+                                        ChatMessage.Type.RECEIVED, null, null, null, true,
+                                        text, timestampMs, msgId));
                                 runOnUiThread(() -> refreshTabLabel(key));
                             }
                         }, "signal-recv").start();
                         return;
                     }
                     appendToTab(key, new ChatMessage(nick, text,
-                            ChatMessage.Type.RECEIVED, replyNick, replyText, imageUrl));
+                            ChatMessage.Type.RECEIVED, replyNick, replyText, imageUrl,
+                            false, null, timestampMs, msgId));
                     if (isDmTab(key)) runOnUiThread(() -> refreshTabLabel(key));
                 }
                 @Override public void onNotice(String serverName, String fromNick, String text) {
@@ -476,6 +485,8 @@ public class MainActivity extends AppCompatActivity {
             @Override public void onPageSelected(int position) {
                 updateMembersButtonVisibility();
                 updateDiscoverButtonVisibility();
+                visibleTabKey = currentTabKey();
+                if (isAppInForeground) markTabRead(visibleTabKey);
             }
         });
 
@@ -523,22 +534,30 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onStart() {
         super.onStart();
+        isAppInForeground = true;
         if (serviceBound && ircService != null) ircService.setAppVisible(true);
+        visibleTabKey = currentTabKey();
+        markCurrentTabRead();
     }
 
     @Override
     protected void onStop() {
         super.onStop();
+        isAppInForeground = false;
         if (serviceBound && ircService != null) ircService.setAppVisible(false);
+        saveHandler.removeCallbacks(saveRunnable);
+        saveHistoryNow();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        isAppInForeground = true;
         if (crypto != null) {
             ThemeHelper.apply(this, crypto);
             if (focusedServerName != null && serverLabelRow != null) refreshServerLabel();
         }
+        markCurrentTabRead();
     }
 
     @Override
@@ -1143,11 +1162,48 @@ public class MainActivity extends AppCompatActivity {
             layout.addView(serverView);
         }
 
+        int unread;
+        synchronized (stateLock) {
+            Integer c = unreadCounts.get(key);
+            unread = c != null ? c : 0;
+        }
+
+        android.widget.LinearLayout channelRow = new android.widget.LinearLayout(this);
+        channelRow.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        channelRow.setGravity(android.view.Gravity.CENTER);
+
         TextView channelView = new TextView(this);
         channelView.setText(channel);
         channelView.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, multiServer ? 12 : 14);
         channelView.setGravity(android.view.Gravity.CENTER);
-        layout.addView(channelView);
+        channelRow.addView(channelView);
+
+        if (unread > 0) {
+            TextView badge = new TextView(this);
+            badge.setText(unread > 99 ? "99+" : String.valueOf(unread));
+            badge.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 10);
+            badge.setTextColor(android.graphics.Color.WHITE);
+            badge.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+            badge.setGravity(android.view.Gravity.CENTER);
+            badge.setMinWidth(dp(this, 16));
+            badge.setMinHeight(dp(this, 16));
+            badge.setPadding(dp(this, 4), 0, dp(this, 4), 0);
+
+            android.graphics.drawable.GradientDrawable badgeBg =
+                    new android.graphics.drawable.GradientDrawable();
+            badgeBg.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+            badgeBg.setColor(ThemeHelper.currentAccent);
+            badge.setBackground(badgeBg);
+
+            android.widget.LinearLayout.LayoutParams badgeParams =
+                    new android.widget.LinearLayout.LayoutParams(
+                            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                            android.widget.LinearLayout.LayoutParams.WRAP_CONTENT);
+            badgeParams.setMargins(dp(this, 4), 0, 0, 0);
+            channelRow.addView(badge, badgeParams);
+        }
+
+        layout.addView(channelRow);
 
         tab.setCustomView(layout);
     }
@@ -1158,6 +1214,7 @@ public class MainActivity extends AppCompatActivity {
             chatLogs.remove(key);
             chatRowIds.remove(key);
             dmGreetingSent.remove(key);
+            unreadCounts.remove(key);
         }
         if (msgDb != null) {
             new Thread(() -> msgDb.deleteTab(key), "db-close-tab").start();
@@ -1192,6 +1249,7 @@ public class MainActivity extends AppCompatActivity {
                         tabKeys.remove(key);
                         chatLogs.remove(key);
                         chatRowIds.remove(key);
+                        unreadCounts.remove(key);
                     }
                 }
                 if (!keysToRemove.isEmpty()) pagerAdapter.notifyDataSetChanged();
@@ -1243,6 +1301,7 @@ public class MainActivity extends AppCompatActivity {
                 chatRowIds.remove(key);
                 dmGreetingSent.remove(key);
                 channelMembers.remove(key);
+                unreadCounts.remove(key);
             }
             knownServers.remove(name);
         }
@@ -2085,6 +2144,38 @@ public class MainActivity extends AppCompatActivity {
         if (tab != null) applyTabLabel(tab, key);
     }
 
+    private void markTabUnread(String key) {
+        if (key == null) return;
+        synchronized (stateLock) {
+            Integer current = unreadCounts.get(key);
+            unreadCounts.put(key, current == null ? 1 : current + 1);
+        }
+        scheduleSave();
+        runOnUiThread(() -> refreshTabLabel(key));
+    }
+
+    private void markTabRead(String key) {
+        if (key == null) return;
+        boolean changed;
+        synchronized (stateLock) {
+            changed = unreadCounts.remove(key) != null;
+        }
+        if (changed) {
+            scheduleSave();
+            refreshTabLabel(key);
+        }
+    }
+
+    private void markCurrentTabRead() {
+        if (viewPager == null || pagerAdapter == null) return;
+        markTabRead(currentTabKey());
+    }
+
+    private static int dp(android.content.Context ctx, int value) {
+        return Math.round(android.util.TypedValue.applyDimension(
+                android.util.TypedValue.COMPLEX_UNIT_DIP, value, ctx.getResources().getDisplayMetrics()));
+    }
+
     private static final int[] FP_COLORS = {
             0xFF64B5F6,
             0xFFFFFFFF,
@@ -2234,7 +2325,10 @@ public class MainActivity extends AppCompatActivity {
     private void appendToTab(String key, ChatMessage msg) {
         long rowId = -1;
         if (msgDb != null) {
-            rowId = msgDb.insert(key, msg);
+            rowId = msgDb.insertIfNew(key, msg);
+            if (rowId == MessageDatabase.DUPLICATE_MESSAGE) {
+                return;
+            }
         }
         final long finalRowId = rowId;
         synchronized (stateLock) {
@@ -2252,6 +2346,12 @@ public class MainActivity extends AppCompatActivity {
             if (ids != null) ids.add(finalRowId);
         }
         scheduleSave();
+
+        boolean isSeen = isAppInForeground && key.equals(visibleTabKey);
+        if (!isSeen && !msg.isSent() && !msg.isSystem()) {
+            markTabUnread(key);
+        }
+
         runOnUiThread(() -> pagerAdapter.deliverMessage(key, msg));
     }
 
@@ -2312,6 +2412,16 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
             crypto.putString(KEY_SAVED_DMS, dmArr.toString());
+
+            JSONObject unreadObj = new JSONObject();
+            synchronized (stateLock) {
+                for (Map.Entry<String, Integer> e : unreadCounts.entrySet()) {
+                    if (e.getValue() != null && e.getValue() > 0) {
+                        unreadObj.put(e.getKey(), (int) e.getValue());
+                    }
+                }
+            }
+            crypto.putString(KEY_UNREAD_COUNTS, unreadObj.toString());
 
         } catch (JSONException e) {
             android.util.Log.e("MainActivity", "saveHistory failed", e);
@@ -2399,6 +2509,20 @@ public class MainActivity extends AppCompatActivity {
                         List<ChatMessage> msgs = loadChannelHistory(serverPart, nick);
                         chatLogs.put(key, msgs);
                         tabKeys.add(key);
+                    }
+                }
+            }
+
+            String savedUnreadJson = crypto.getString(KEY_UNREAD_COUNTS, null);
+            if (savedUnreadJson != null) {
+                JSONObject unreadObj = new JSONObject(savedUnreadJson);
+                synchronized (stateLock) {
+                    java.util.Iterator<String> keysIt = unreadObj.keys();
+                    while (keysIt.hasNext()) {
+                        String key = keysIt.next();
+                        if (!tabKeys.contains(key)) continue;
+                        int count = unreadObj.optInt(key, 0);
+                        if (count > 0) unreadCounts.put(key, count);
                     }
                 }
             }

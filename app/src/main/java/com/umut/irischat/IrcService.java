@@ -105,7 +105,7 @@ public class IrcService extends Service {
         void onDisconnected(String serverName);
         default void onConnectionFailed(String serverName) {}
         void onMessage(String serverName, String channel, String nick,
-                       String text, String imageUrl);
+                       String text, String imageUrl, String msgId, long timestampMs);
         void onNotice(String serverName, String fromNick, String text);
         default void onMembersChanged(String serverName, String channel,
                                       List<String> sortedNicks) {}
@@ -618,9 +618,11 @@ public class IrcService extends Service {
     }
 
     private static class QueuedMessage {
-        final String serverName, channel, nick, text, imageUrl;
-        QueuedMessage(String s, String c, String n, String t, String i) {
-            serverName = s; channel = c; nick = n; text = t; imageUrl = i;
+        final String serverName, channel, nick, text, imageUrl, msgId;
+        final long timestampMs;
+        QueuedMessage(String s, String c, String n, String t, String i, String m, long ts) {
+            serverName = s; channel = c; nick = n; text = t; imageUrl = i; msgId = m;
+            timestampMs = ts;
         }
     }
 
@@ -636,13 +638,24 @@ public class IrcService extends Service {
 
     private void enqueueOrDeliver(String serverName, String channel,
                                   String nick, String text, String imageUrl) {
+        enqueueOrDeliver(serverName, channel, nick, text, imageUrl, null, System.currentTimeMillis());
+    }
+
+    private void enqueueOrDeliver(String serverName, String channel,
+                                  String nick, String text, String imageUrl, String msgId) {
+        enqueueOrDeliver(serverName, channel, nick, text, imageUrl, msgId, System.currentTimeMillis());
+    }
+
+    private void enqueueOrDeliver(String serverName, String channel,
+                                  String nick, String text, String imageUrl, String msgId,
+                                  long timestampMs) {
         Listener l = listener;
         if (l != null) {
-            mainHandler.post(() -> l.onMessage(serverName, channel, nick, text, imageUrl));
+            mainHandler.post(() -> l.onMessage(serverName, channel, nick, text, imageUrl, msgId, timestampMs));
         } else {
-            if (!messageQueue.offer(new QueuedMessage(serverName, channel, nick, text, imageUrl))) {
+            if (!messageQueue.offer(new QueuedMessage(serverName, channel, nick, text, imageUrl, msgId, timestampMs))) {
                 messageQueue.poll();
-                messageQueue.offer(new QueuedMessage(serverName, channel, nick, text, imageUrl));
+                messageQueue.offer(new QueuedMessage(serverName, channel, nick, text, imageUrl, msgId, timestampMs));
             }
         }
     }
@@ -663,7 +676,7 @@ public class IrcService extends Service {
         while ((qm = messageQueue.poll()) != null) {
             final QueuedMessage msg = qm;
             mainHandler.post(() -> l.onMessage(msg.serverName, msg.channel,
-                    msg.nick, msg.text, msg.imageUrl));
+                    msg.nick, msg.text, msg.imageUrl, msg.msgId, msg.timestampMs));
         }
         QueuedNotice qn;
         while ((qn = noticeQueue.poll()) != null) {
@@ -1245,13 +1258,14 @@ public class IrcService extends Service {
 
                             if (nick.equalsIgnoreCase(myNick)) return;
 
+                            String msgId = extractServerMsgId(st);
                             if (isDuplicateMessage(name, channel, nick, text,
-                                    extractServerMsgId(st), serverTimeMs)) return;
+                                    msgId, serverTimeMs)) return;
 
                             String imgUrl = MainActivity.extractImageUrl(text);
                             String display = imgUrl != null
                                     ? text.replace(imgUrl, "").trim() : text;
-                            enqueueOrDeliver(name, channel, nick, display, imgUrl);
+                            enqueueOrDeliver(name, channel, nick, display, imgUrl, msgId, serverTimeMs);
                         }
 
                         @Override
@@ -1272,11 +1286,12 @@ public class IrcService extends Service {
 
                             if (nick.equalsIgnoreCase(myNick)) return;
 
+                            String msgId = extractServerMsgId(st);
                             if (isDuplicateMessage(name, nick, nick, text,
-                                    extractServerMsgId(st), serverTimeMs)) return;
+                                    msgId, serverTimeMs)) return;
 
                             if (SignalStore.isSignalMessage(text)) {
-                                enqueueOrDeliver(name, nick, nick, text, null);
+                                enqueueOrDeliver(name, nick, nick, text, null, msgId, serverTimeMs);
                                 maybeNotifyDm(name, nick, null, null, true);
                                 return;
                             }
@@ -1284,7 +1299,7 @@ public class IrcService extends Service {
                             String imgUrl = MainActivity.extractImageUrl(text);
                             String display = imgUrl != null
                                     ? text.replace(imgUrl, "").trim() : text;
-                            enqueueOrDeliver(name, nick, nick, display, imgUrl);
+                            enqueueOrDeliver(name, nick, nick, display, imgUrl, msgId, serverTimeMs);
                             maybeNotifyDm(name, nick, display, imgUrl, false);
                         }
 

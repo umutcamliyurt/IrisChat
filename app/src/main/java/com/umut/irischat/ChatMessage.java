@@ -12,6 +12,7 @@ public class ChatMessage {
     private final boolean encrypted;
     private final String  rawWire;
     private final long    timestamp;
+    private final String  msgId;
 
     public ChatMessage(String nick, String text, Type type) {
         this(nick, text, type, null, null, null, false);
@@ -37,12 +38,26 @@ public class ChatMessage {
                        String replyToNick, String replyToText, String imageUrl,
                        boolean encrypted, String rawWire) {
         this(nick, text, type, replyToNick, replyToText, imageUrl, encrypted, rawWire,
-                System.currentTimeMillis());
+                System.currentTimeMillis(), null);
+    }
+
+    public ChatMessage(String nick, String text, Type type,
+                       String replyToNick, String replyToText, String imageUrl,
+                       boolean encrypted, String rawWire, String msgId) {
+        this(nick, text, type, replyToNick, replyToText, imageUrl, encrypted, rawWire,
+                System.currentTimeMillis(), msgId);
     }
 
     public ChatMessage(String nick, String text, Type type,
                        String replyToNick, String replyToText, String imageUrl,
                        boolean encrypted, String rawWire, long timestamp) {
+        this(nick, text, type, replyToNick, replyToText, imageUrl, encrypted, rawWire,
+                timestamp, null);
+    }
+
+    public ChatMessage(String nick, String text, Type type,
+                       String replyToNick, String replyToText, String imageUrl,
+                       boolean encrypted, String rawWire, long timestamp, String msgId) {
         this.nick        = nick;
         this.text        = text;
         this.type        = type;
@@ -53,6 +68,7 @@ public class ChatMessage {
         this.encrypted   = encrypted;
         this.rawWire     = rawWire;
         this.timestamp   = timestamp;
+        this.msgId       = msgId;
     }
 
     public String  getNick()        { return nick; }
@@ -67,4 +83,5 @@ public class ChatMessage {
     public boolean isEncrypted()    { return encrypted; }
     public String  getRawWire()     { return rawWire; }
     public long    getTimestamp()   { return timestamp; }
+    public String  getMsgId()       { return msgId; }
 }
