@@ -268,6 +268,14 @@ public class ServerSwitcherActivity extends AppCompatActivity {
         }
         btnChangePassword.setOnClickListener(v -> showChangePasswordDialog());
 
+        Button btnViewLogs = view.findViewById(R.id.btnViewLogs);
+        btnViewLogs.setTextColor(currentAccent);
+        if (btnViewLogs instanceof MaterialButton) {
+            ((MaterialButton) btnViewLogs).setStrokeColor(ColorStateList.valueOf(currentAccent));
+        }
+        btnViewLogs.setOnClickListener(v ->
+                startActivity(new Intent(this, LogViewerActivity.class)));
+
         TextView versionText    = view.findViewById(R.id.settingsVersionText);
         versionText.setText(getString(R.string.app_version_label, getAppVersionName()));
 

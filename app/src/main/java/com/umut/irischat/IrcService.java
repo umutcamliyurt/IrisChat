@@ -71,6 +71,7 @@ public class IrcService extends Service {
     public static final String EXTRA_DM_NICK   = "com.umut.irischat.extra.DM_NICK";
 
     private static final long RECONNECT_DELAY_BASE_MS = 5_000L;
+    private static final long CAP_NEGOTIATION_WATCHDOG_MS = 12_000L;
     private static final long RECONNECT_DELAY_MAX_MS   = 300_000L;
     private static final int  MAX_QUEUED_MSGS_PER_TAB  = 200;
     private static final int  MAX_INBOUND_MSG_BYTES    = 8192;
@@ -104,6 +105,9 @@ public class IrcService extends Service {
         void onConnected(String serverName);
         void onDisconnected(String serverName);
         default void onConnectionFailed(String serverName) {}
+        default void onConnectionFailed(String serverName, String errorDetail) {
+            onConnectionFailed(serverName);
+        }
         void onMessage(String serverName, String channel, String nick,
                        String text, String imageUrl, String msgId, long timestampMs);
         void onNotice(String serverName, String fromNick, String text);
@@ -244,7 +248,7 @@ public class IrcService extends Service {
             handleBatchControlLine(serverName, state, rawLine);
             handleChathistoryFailLine(serverName, state, rawLine);
             handleChannelListLine(serverName, rawLine);
-            handleGenericServerReply(serverName, rawLine);
+            handleGenericServerReply(serverName, rawLine, state);
 
             super.handleLine(rawLine);
         }
@@ -398,26 +402,93 @@ public class IrcService extends Service {
                     "311", "312", "313", "317", "318", "319", "330", "338",
                     "331", "332", "333",
                     "401", "403", "404", "405", "406", "421", "432", "433", "436",
-                    "441", "442", "443", "461", "467", "471", "473", "474", "475",
+                    "441", "442", "443", "461", "464", "465", "466", "467", "471", "473", "474", "475",
                     "476", "477", "478", "482"
             ));
 
-    private void handleGenericServerReply(String serverName, String rawLine) {
+    private void handleGenericServerReply(String serverName, String rawLine, ServerState state) {
         String line = stripTags(rawLine);
         if (line == null || line.isEmpty()) return;
 
         String[] parts = line.split(" ");
         int idx = (parts.length > 0 && parts[0].startsWith(":")) ? 1 : 0;
-        if (parts.length <= idx + 1) return;
+        if (parts.length <= idx) return;
 
         String code = parts[idx];
+
+        if (code.equals("ERROR")) {
+            handleErrorLine(serverName, line, state);
+            return;
+        }
+
+        if (code.equals("NOTICE") && parts.length > idx + 1 && parts[idx + 1].equals("*")) {
+            handlePreRegistrationNotice(serverName, line);
+            return;
+        }
+
+        if (parts.length <= idx + 1) return;
         if (!INTERESTING_NUMERICS.contains(code)) return;
 
         String text = formatNumericReply(code, line, parts, idx + 1);
         if (text == null || text.isEmpty()) return;
 
+        if (code.equals("465") && state != null) {
+            Log.w(TAG, "Server ban (465) detected on " + serverName + ": " + text);
+            state.retryCount.set(Math.max(state.retryCount.get(), 6));
+        }
+
         Listener l = listener;
         if (l != null) mainHandler.post(() -> l.onServerText(serverName, text));
+    }
+
+    private static final java.util.regex.Pattern CLOSING_LINK_REASON =
+            java.util.regex.Pattern.compile("Closing Link:\\s*\\S+\\s*\\(([^)]*)\\)");
+
+    private void handleErrorLine(String serverName, String line, ServerState state) {
+        int colonIdx = line.indexOf(" :");
+        String message = colonIdx >= 0 ? line.substring(colonIdx + 2) : line;
+
+        String reason = null;
+        java.util.regex.Matcher m = CLOSING_LINK_REASON.matcher(message);
+        if (m.find()) reason = m.group(1).trim();
+
+        String friendly;
+        boolean banned = reason != null
+                && reason.toLowerCase(java.util.Locale.ROOT).contains("banned");
+
+        if (banned) {
+            friendly = "🚫 " + serverName + " rejected the connection: " + reason
+                    + ". This is a server-side ban, usually caused by connecting from a "
+                    + "VPN/VPS/hosting IP the network has blocklisted — reconnecting won't "
+                    + "help until that's resolved.";
+            Log.w(TAG, "Server ban detected on " + serverName + ": " + reason);
+            if (state != null) {
+                state.retryCount.set(Math.max(state.retryCount.get(), 6));
+            }
+        } else if (reason != null && !reason.isEmpty()) {
+            friendly = "Connection closed by " + serverName + ": " + reason;
+        } else if (!message.isEmpty()) {
+            friendly = "Connection closed by " + serverName + ": " + message;
+        } else {
+            friendly = "Connection closed by " + serverName;
+        }
+
+        Listener l = listener;
+        if (l != null) mainHandler.post(() -> l.onServerText(serverName, friendly));
+    }
+
+    private void handlePreRegistrationNotice(String serverName, String line) {
+        int colonIdx = line.indexOf(" :");
+        if (colonIdx < 0) return;
+        String text = line.substring(colonIdx + 2).trim();
+        if (text.isEmpty()) return;
+
+        if (text.startsWith("***")) text = text.substring(3).trim();
+        if (text.isEmpty()) return;
+
+        final String friendly = text;
+        Listener l = listener;
+        if (l != null) mainHandler.post(() -> l.onServerText(serverName, friendly));
     }
 
     private static String formatNumericReply(String code, String line, String[] parts, int paramsStart) {
@@ -476,6 +547,15 @@ public class IrcService extends Service {
                 String nick = middle.isEmpty() ? "" : middle.get(0);
                 return nick + " is away" + (trailing != null && !trailing.isEmpty() ? ": " + trailing : "");
             }
+            case "465":
+                return "🚫 You are banned from this server"
+                        + (trailing != null && !trailing.isEmpty() ? ": " + trailing : "");
+            case "466":
+                return "⚠️ This connection will be banned from the server soon"
+                        + (trailing != null && !trailing.isEmpty() ? ": " + trailing : "");
+            case "464":
+                return "Server password rejected"
+                        + (trailing != null && !trailing.isEmpty() ? ": " + trailing : "");
             case "305":
             case "306":
                 return trailing;
@@ -741,7 +821,15 @@ public class IrcService extends Service {
         networkCallback = new ConnectivityManager.NetworkCallback() {
             @Override
             public void onAvailable(@NonNull Network network) {
-                Log.d(TAG, "Network available – checking connections");
+                int pendingCount;
+                synchronized (states) {
+                    pendingCount = 0;
+                    for (ServerState st : states.values()) {
+                        if (!st.connected.get() && st.shouldRun.get()) pendingCount++;
+                    }
+                }
+                Log.i(TAG, "Network available (net=" + network + ") – "
+                        + pendingCount + " server(s) pending reconnect");
                 synchronized (states) {
                     for (ServerState st : states.values()) {
                         if (!st.connected.get() && st.shouldRun.get()) {
@@ -750,6 +838,16 @@ public class IrcService extends Service {
                         }
                     }
                 }
+            }
+
+            @Override
+            public void onLost(@NonNull Network network) {
+                Log.w(TAG, "Network lost (net=" + network + ")");
+            }
+
+            @Override
+            public void onUnavailable() {
+                Log.w(TAG, "Network unavailable — no usable network found");
             }
         };
 
@@ -883,8 +981,12 @@ public class IrcService extends Service {
     public void connect(Server server) {
         String name = server.getName();
         ServerState existing = states.get(name);
-        if (existing != null && existing.connected.get()) return;
+        if (existing != null && existing.connected.get()) {
+            Log.d(TAG, "connect(" + name + ") ignored — already connected");
+            return;
+        }
 
+        Log.i(TAG, "connect(" + name + ") requested by caller");
         stopServerState(name);
 
         ServerState st = new ServerState(server);
@@ -895,6 +997,7 @@ public class IrcService extends Service {
     }
 
     public void disconnectServer(String serverName) {
+        Log.i(TAG, "disconnectServer(" + serverName + ") requested by caller");
         stopServerState(serverName);
         states.remove(serverName);
         purgeHistoryStateFor(serverName);
@@ -1184,6 +1287,18 @@ public class IrcService extends Service {
     private void launchBot(ServerState st) {
         String name   = st.server.getName();
         String myNick = st.server.getNickname();
+        long   attemptStartMs = System.currentTimeMillis();
+
+        Log.i(TAG, "=== connect attempt [" + name + "] host=" + st.server.getHost()
+                + " port=" + st.server.getPort()
+                + " tls=" + st.server.isTls()
+                + " nick=" + myNick
+                + " sasl=" + st.server.hasSasl()
+                + " retry#" + st.retryCount.get() + " ===");
+        {
+            Listener l0 = listener;
+            if (l0 != null) mainHandler.post(() -> l0.onServerText(name, "Connecting to server…"));
+        }
 
         try {
             Configuration.Builder builder = new Configuration.Builder()
@@ -1214,7 +1329,9 @@ public class IrcService extends Service {
                             refreshNotification();
                             Listener l = listener;
                             if (l != null) mainHandler.post(() -> l.onConnected(name));
-                            Log.i(TAG, "Connected to " + name);
+                            if (l != null) mainHandler.post(() -> l.onServerText(name, "Connected"));
+                            long elapsed = System.currentTimeMillis() - attemptStartMs;
+                            Log.i(TAG, "Connected to " + name + " in " + elapsed + " ms");
 
                             backfillKnownDmTargets(name);
                         }
@@ -1225,15 +1342,29 @@ public class IrcService extends Service {
                             refreshNotification();
                             Listener l = listener;
                             if (l != null) mainHandler.post(() -> l.onDisconnected(name));
-                            Log.i(TAG, "Disconnected from " + name);
+
+                            Exception cause = event.getDisconnectException();
+                            long elapsed = System.currentTimeMillis() - attemptStartMs;
+                            String detail = cause != null
+                                    ? describeConnectFailure(cause)
+                                    : "Connection closed unexpectedly (no exception — possible ping timeout)";
+                            if (cause != null) {
+                                Log.e(TAG, "Disconnected from " + name + " after " + elapsed
+                                        + " ms — cause: " + detail, cause);
+                            } else {
+                                Log.i(TAG, "Disconnected from " + name + " after " + elapsed
+                                        + " ms (clean close, no exception)");
+                            }
 
                             if (st.shouldRun.get()) {
                                 if (st.suppressNextDisconnectReconnect.getAndSet(false)) {
                                     Log.d(TAG, "Skipping reconnect for intentional close: " + name);
                                 } else {
                                     long delay = nextDelay(st.retryCount.getAndIncrement());
-                                    Log.i(TAG, "Reconnect " + name + " in " + delay + " ms");
-                                    if (l != null) mainHandler.post(() -> l.onConnectionFailed(name));
+                                    Log.i(TAG, "Reconnect " + name + " in " + delay
+                                            + " ms (attempt #" + st.retryCount.get() + ", last error: "
+                                            + detail + ")");
+                                    if (l != null) mainHandler.post(() -> l.onConnectionFailed(name, detail));
                                     scheduleReconnect(st, delay);
                                 }
                             }
@@ -1408,6 +1539,7 @@ public class IrcService extends Service {
                                              com.google.common.collect.ImmutableList<String> capabilities)
                             throws org.pircbotx.exception.CAPException {
                         Log.w(TAG, "Server " + name + " NAK'd SASL cap");
+                        bot.sendRaw().rawLine("CAP END");
                         done = true;
                         return true;
                     }
@@ -1440,6 +1572,7 @@ public class IrcService extends Service {
                         }
                         if (numeric.equals("904") || numeric.equals("905")) {
                             Log.w(TAG, "SASL auth failed on " + name + ": " + rawLine);
+                            bot.sendRaw().rawLine("CAP END");
                             done = true;
                             return true;
                         }
@@ -1450,6 +1583,25 @@ public class IrcService extends Service {
 
             PircBotX bot = new PircBotX(builder.buildConfiguration());
             st.bot = bot;
+
+            final PircBotX capWatchdogBot = bot;
+            workerExecutor.submit(() -> {
+                try {
+                    Thread.sleep(CAP_NEGOTIATION_WATCHDOG_MS);
+                    if (st.bot == capWatchdogBot && !st.connected.get()) {
+                        Log.w(TAG, "CAP negotiation watchdog: " + name
+                                + " hasn't completed registration after "
+                                + CAP_NEGOTIATION_WATCHDOG_MS + " ms — forcing CAP END");
+                        try {
+                            capWatchdogBot.sendRaw().rawLine("CAP END");
+                        } catch (Exception e) {
+                            Log.w(TAG, "CAP END watchdog send failed for " + name, e);
+                        }
+                    }
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            });
 
             st.botFuture = botExecutor.submit(() -> {
                 try {
@@ -1462,7 +1614,8 @@ public class IrcService extends Service {
                     if (l != null) mainHandler.post(() -> l.onDisconnected(name));
                     if (st.shouldRun.get()) {
                         long delay = nextDelay(st.retryCount.getAndIncrement());
-                        if (l != null) mainHandler.post(() -> l.onConnectionFailed(name));
+                        String detail = describeConnectFailure(e);
+                        if (l != null) mainHandler.post(() -> l.onConnectionFailed(name, detail));
                         scheduleReconnect(st, delay);
                     }
                 }
@@ -1475,10 +1628,33 @@ public class IrcService extends Service {
             Listener l = listener;
             if (l != null) mainHandler.post(() -> l.onDisconnected(name));
             if (st.shouldRun.get()) {
-                if (l != null) mainHandler.post(() -> l.onConnectionFailed(name));
+                String detail = describeConnectFailure(e);
+                if (l != null) mainHandler.post(() -> l.onConnectionFailed(name, detail));
                 scheduleReconnect(st, nextDelay(st.retryCount.getAndIncrement()));
             }
         }
+    }
+
+    private static String describeConnectFailure(Throwable e) {
+        if (e == null) return "Unknown error";
+        if (e instanceof java.net.UnknownHostException) {
+            return "Could not resolve host: " + e.getMessage();
+        }
+        if (e instanceof java.net.SocketTimeoutException) {
+            return "Connection timed out (server unreachable or port blocked)";
+        }
+        if (e instanceof javax.net.ssl.SSLHandshakeException) {
+            return "TLS handshake failed: " + e.getMessage();
+        }
+        if (e instanceof javax.net.ssl.SSLException) {
+            return "TLS error: " + e.getMessage();
+        }
+        if (e instanceof java.net.ConnectException) {
+            return "Connection refused/unreachable: " + e.getMessage();
+        }
+        String msg = e.getMessage();
+        String cls = e.getClass().getSimpleName();
+        return msg != null ? (cls + ": " + msg) : cls;
     }
 
     private void scheduleReconnect(ServerState st, long delayMs) {
@@ -1490,7 +1666,8 @@ public class IrcService extends Service {
                 Thread.sleep(delayMs);
                 if (!st.shouldRun.get()) { releaseWakeLock(); return; }
 
-                Log.i(TAG, "Reconnecting " + st.server.getName() + "…");
+                Log.i(TAG, "Reconnecting " + st.server.getName() + "… (attempt #"
+                        + st.retryCount.get() + ", waited " + delayMs + " ms)");
 
                 st.suppressNextDisconnectReconnect.set(true);
                 PircBotX old = st.bot;

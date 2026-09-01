@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/bg_primary">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="@color/bg_surface"
+        android:paddingStart="16dp"
+        android:paddingEnd="0dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp"
+        android:elevation="4dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/debug_logs"
+            android:textColor="@color/text_primary"
+            android:textSize="20sp"
+            android:fontFamily="sans-serif-medium" />
+
+        <ImageButton
+            android:id="@+id/logsRefreshButton"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@android:drawable/ic_popup_sync"
+            android:tint="@android:color/white"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:padding="10dp"
+            android:contentDescription="@string/refresh" />
+
+        <ImageButton
+            android:id="@+id/logsCopyButton"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@android:drawable/ic_menu_save"
+            android:tint="@android:color/white"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:padding="10dp"
+            android:contentDescription="@string/copy" />
+
+        <ImageButton
+            android:id="@+id/logsShareButton"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@android:drawable/ic_menu_share"
+            android:tint="@android:color/white"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:padding="10dp"
+            android:contentDescription="@string/share" />
+
+        <ImageButton
+            android:id="@+id/logsClearButton"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:src="@android:drawable/ic_menu_delete"
+            android:tint="@android:color/white"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:padding="10dp"
+            android:layout_marginEnd="4dp"
+            android:contentDescription="@string/clear" />
+
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
+
+    <ScrollView
+        android:id="@+id/logsScrollView"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="@color/bg_primary"
+        android:scrollbars="vertical"
+        android:fillViewport="true">
+
+        <TextView
+            android:id="@+id/logsTextView"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="14dp"
+            android:fontFamily="monospace"
+            android:textColor="@color/text_primary"
+            android:textColorHint="@color/text_hint"
+            android:textIsSelectable="true"
+            android:textSize="11sp"
+            android:lineSpacingMultiplier="1.15"
+            tools:text="Loading…"
+            xmlns:tools="http://schemas.android.com/tools" />
+
+    </ScrollView>
+
+</LinearLayout>

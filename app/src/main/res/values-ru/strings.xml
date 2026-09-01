@@ -178,4 +178,14 @@
     <string name="new_password_hint">Новый пароль</string>
     <string name="confirm_new_password_hint">Подтвердите новый пароль</string>
     <string name="app_version_label">IrisChat %1$s</string>
+    <string name="debug_logs">Отладочные журналы</string>
+    <string name="debug_logs_summary">Просмотр последних журналов приложения для устранения проблем с подключением</string>
+    <string name="view_logs">Просмотреть журналы</string>
+    <string name="refresh">Обновить</string>
+    <string name="share">Поделиться</string>
+    <string name="clear">Очистить</string>
+    <string name="logs_loading">Загрузка…</string>
+    <string name="logs_empty_placeholder">Подходящих записей журнала пока нет — попробуйте воспроизвести проблему, затем нажмите «Обновить»</string>
+    <string name="logs_cleared">Буфер журнала очищен</string>
+    <string name="logs_copied">Скопировано в буфер обмена</string>
 </resources>

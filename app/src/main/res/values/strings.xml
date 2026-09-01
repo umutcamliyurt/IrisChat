@@ -175,4 +175,14 @@ Session fingerprint (verify out-of-band):
     <string name="new_password_hint">New password</string>
     <string name="confirm_new_password_hint">Confirm new password</string>
     <string name="app_version_label">IrisChat %1$s</string>
+    <string name="debug_logs">Debug Logs</string>
+    <string name="debug_logs_summary">View recent app logs for troubleshooting connection issues</string>
+    <string name="view_logs">View Logs</string>
+    <string name="refresh">Refresh</string>
+    <string name="share">Share</string>
+    <string name="clear">Clear</string>
+    <string name="logs_loading">Loading…</string>
+    <string name="logs_empty_placeholder">No matching log lines yet — try reproducing the issue, then tap Refresh</string>
+    <string name="logs_cleared">Log buffer cleared</string>
+    <string name="logs_copied">Copied to clipboard</string>
 </resources>

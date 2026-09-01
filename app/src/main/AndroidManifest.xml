@@ -35,6 +35,11 @@
             android:name=".ServerSwitcherActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".LogViewerActivity"
+            android:exported="false"
+            android:label="Debug Logs" />
+
         <service
             android:name=".IrcService"
             android:foregroundServiceType="specialUse"

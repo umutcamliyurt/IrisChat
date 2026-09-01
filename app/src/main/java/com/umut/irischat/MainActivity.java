@@ -189,7 +189,19 @@ public class MainActivity extends AppCompatActivity {
                     runOnUiThread(() -> refreshStatusBar());
                 }
                 @Override public void onConnectionFailed(String serverName) {
-                    runOnUiThread(() -> showConnectionFailedToast(serverName));
+                    runOnUiThread(() -> showConnectionFailedToast(serverName, null));
+                }
+                @Override public void onConnectionFailed(String serverName, String errorDetail) {
+                    runOnUiThread(() -> showConnectionFailedToast(serverName, errorDetail));
+
+                    if (errorDetail != null) {
+                        String key = currentTabKeyForServer(serverName);
+                        if (key != null) {
+                            appendToTab(key, new ChatMessage(null,
+                                    "Connection failed: " + errorDetail,
+                                    ChatMessage.Type.SYSTEM));
+                        }
+                    }
                 }
                 @Override public void onMessage(String serverName, String channel,
                                                 String nick, String text, String imageUrl,
@@ -572,10 +584,13 @@ public class MainActivity extends AppCompatActivity {
         cancelConnectionFailedToast();
     }
 
-    private void showConnectionFailedToast(String serverName) {
+    private void showConnectionFailedToast(String serverName, String errorDetail) {
         cancelConnectionFailedToast();
 
         String text = getString(R.string.server_not_connected, serverName);
+        if (errorDetail != null && !errorDetail.isEmpty()) {
+            text = text + " (" + errorDetail + ")";
+        }
         connectionErrorToast = android.widget.Toast.makeText(
                 this, text, android.widget.Toast.LENGTH_LONG);
         connectionErrorToast.show();

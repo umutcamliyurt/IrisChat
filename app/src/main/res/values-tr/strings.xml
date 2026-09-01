@@ -175,4 +175,14 @@ Oturum parmak izi (bant dışı doğrulayın):
     <string name="new_password_hint">Yeni şifre</string>
     <string name="confirm_new_password_hint">Yeni şifreyi onayla</string>
     <string name="app_version_label">IrisChat %1$s</string>
+    <string name="debug_logs">Hata Ayıklama</string>
+    <string name="debug_logs_summary">Bağlantı sorunlarını gidermek için son uygulama günlüklerini görüntüleyin</string>
+    <string name="view_logs">Günlükleri Görüntüle</string>
+    <string name="refresh">Yenile</string>
+    <string name="share">Paylaş</string>
+    <string name="clear">Temizle</string>
+    <string name="logs_loading">Yükleniyor…</string>
+    <string name="logs_empty_placeholder">Henüz eşleşen günlük satırı yok — sorunu yeniden oluşturmayı deneyin, ardından Yenile\'ye dokunun</string>
+    <string name="logs_cleared">Günlük arabelleği temizlendi</string>
+    <string name="logs_copied">Panoya kopyalandı</string>
 </resources>
